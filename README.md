@@ -121,6 +121,49 @@ python -m unittest discover -s tests -v
 
 ---
 
+## 🚀 Reusable Workflow Integration (Zero-Boilerplate for Target Apps)
+
+Target repositories (such as `sample-springboot-app`) can trigger `CodeFactoryAgent` using GitHub's **Reusable Workflow (`workflow_call`)** pattern with a clean, 20-line workflow file:
+
+Create `.github/workflows/code-factory-agent.yml` in the target repository:
+```yaml
+name: 'CodeFactoryAgent'
+
+on:
+  # Manual UI Trigger with ticket number input
+  workflow_dispatch:
+    inputs:
+      jira_ticket_number:
+        description: 'Jira Ticket Number (e.g. KAN-4 or DEMO-1)'
+        required: true
+        type: string
+      mock_mode:
+        description: 'Run in offline mock mode (testing without live credentials)'
+        required: false
+        type: boolean
+        default: false
+
+  # Automated Webhook Trigger on Jira status change
+  repository_dispatch:
+    types: [jira_ticket_ready]
+
+jobs:
+  run-agent:
+    name: 'Run CodeFactoryAgent'
+    uses: abhishexing/Code-Factory-Agent/.github/workflows/agent-runner.yml@main
+    with:
+      jira_ticket_number: ${{ inputs.jira_ticket_number || github.event.client_payload.ticket_number }}
+      mock_mode: ${{ inputs.mock_mode || false }}
+    secrets: inherit
+```
+
+### Why This Reusable Workflow Pattern is Superior:
+- **Centralized Logic:** Java 21 setup, Python environment, dependencies, Code Graph parsing, and execution commands live **100% inside `code-factory`**.
+- **Zero Maintenance:** Updating agent prompts, tools, or dependencies in `code-factory` immediately benefits all caller repositories without editing their code.
+- **Repository-Scoped Security:** Secrets and write permissions remain strictly scoped to the target repository.
+
+---
+
 ## 🛡️ Security & Sandbox Controls
 
 - **Prompt Injection Defense:** Jira text is treated as passive requirements (untrusted data).
