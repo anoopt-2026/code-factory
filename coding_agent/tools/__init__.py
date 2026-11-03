@@ -11,6 +11,7 @@ from .repository_tools import (
     commit_changes,
 )
 from .github_tools import push_and_create_pull_request
+from .codegraph_tools import get_architecture_graph, query_code_graph
 
 __all__ = [
     "get_jira_issue",
@@ -25,4 +26,6 @@ __all__ = [
     "get_git_diff",
     "commit_changes",
     "push_and_create_pull_request",
+    "get_architecture_graph",
+    "query_code_graph",
 ]

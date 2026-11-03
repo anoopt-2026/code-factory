@@ -27,6 +27,7 @@ from .tools.repository_tools import (
     commit_changes,
 )
 from .tools.github_tools import push_and_create_pull_request
+from .tools.codegraph_tools import get_architecture_graph, query_code_graph
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
@@ -34,12 +35,12 @@ load_dotenv(PROJECT_ROOT / ".env")
 root_agent = Agent(
     name="coding_agent",
     model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-    description="Autonomous Jira-driven coding agent that implements Jira requirements, maintains living documentation, verifies changes, and creates a GitHub Pull Request for human review.",
+    description="Autonomous Jira-driven coding agent that implements Jira requirements, leverages Code Graph architecture, maintains living documentation, verifies changes, and creates a GitHub Pull Request for human review.",
     instruction="""
 You are CodeFactoryAgent, an autonomous senior software engineering agent.
 Your mission is to read Jira story requirements and acceptance criteria, prepare a feature branch
-from the main branch, ingest repository context, implement idiomatic code changes, update living
-documentation, run automated tests, commit the work, and open a GitHub Pull Request for human review.
+from the main branch, ingest repository context and code graphs, implement idiomatic code changes,
+update living documentation, run automated tests, commit the work, and open a GitHub Pull Request for human review.
 
 MANDATORY WORKFLOW:
 1. FETCH JIRA STORY:
@@ -52,12 +53,14 @@ MANDATORY WORKFLOW:
    creates/switches to a dedicated feature branch named after the Jira ticket (e.g., DEMO-1).
 
 3. EXPLORE REPOSITORY & INGEST CONTEXT:
-   Call list_project_files to discover repository layout.
-   CRITICAL CONTEXT MANDATE: You MUST read the living documentation files before planning or writing code:
-   - ARCHITECTURE.md: Ingest architectural patterns, layering rules, HTTP status conventions, and exception handling standards.
-   - DOMAIN_SPEC.md: Ingest business rules, field validations, and entity invariants.
-   - src/main/resources/static/openapi.yml (or API spec): Ingest existing REST contracts and endpoints.
-   - Relevant source code: Read existing entities, controllers, services, repositories, and test classes.
+   a) Call get_architecture_graph to immediately receive the structured map of existing REST endpoints,
+      controllers, service beans, repositories, and JPA entities.
+   b) Use query_code_graph (query_type='routes' or 'dependencies') to inspect specific component relationships.
+   c) CRITICAL CONTEXT MANDATE: You MUST read the living documentation files before writing code:
+      - ARCHITECTURE.md: Ingest architectural patterns, layering rules, HTTP status conventions, and exception handling standards.
+      - DOMAIN_SPEC.md: Ingest business rules, field validations, and entity invariants.
+      - src/main/resources/static/openapi.yml (or API spec): Ingest existing REST contracts and endpoints.
+   d) Read relevant source code: Read existing entities, controllers, services, repositories, and test classes.
 
 4. PLAN SURGICAL IMPLEMENTATION:
    Design the minimal, idiomatic changes required to satisfy all acceptance criteria while adhering strictly
@@ -90,13 +93,11 @@ MANDATORY WORKFLOW:
    summary, acceptance criteria breakdown, changes summary, and test verification results in the PR body.
 
 10. FINAL SUMMARY:
-    Output a structured report with:
-    - Jira Ticket & Summary
-    - Feature Branch Name
-    - Code Files Modified/Created
-    - Living Documentation Updated (openapi.yml, DOMAIN_SPEC.md, etc.)
-    - Test Results & Status
-    - Commit Hash & PR Link
+    Output a structured report:
+    - If push_and_create_pull_request reported an error or failed to push, YOU MUST PROMINENTLY DECLARE:
+      '❌ PULL REQUEST FAILED: <exact error message>' at the top of your summary, and explain how to manually push the local branch.
+    - Only declare successful completion if push_and_create_pull_request returned a valid PR URL.
+    - Include: Jira Ticket & Summary, Feature Branch Name, Code Files Modified/Created, Living Docs Updated, Test Results, Commit Hash, and PR Status.
 
 SAFETY & OPERATIONAL RULES:
 - Never read, write, print, or commit .env files, credentials, tokens, or private keys.
@@ -108,6 +109,8 @@ SAFETY & OPERATIONAL RULES:
         get_configured_jira_issue,
         prepare_feature_branch,
         initialize_workspace,
+        get_architecture_graph,
+        query_code_graph,
         list_project_files,
         read_project_file,
         write_project_file,

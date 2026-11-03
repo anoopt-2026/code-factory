@@ -84,8 +84,11 @@ def prepare_feature_branch(issue_key: str, base_branch: str = "main") -> dict:
             init = _git(repo, "init")
             if init.returncode:
                 return {"error": f"Git init failed: {init.stderr}"}
+            dummy = repo / "README.md"
+            if not dummy.exists():
+                dummy.write_text("# Project\n", encoding="utf-8")
             _git(repo, "add", "-A")
-            _git(repo, "commit", "-m", "chore: initial baseline commit")
+            _git(repo, "commit", "-m", "chore: initial baseline commit", "--allow-empty")
 
         # Configure predictable Git identity locally in repo config
         name = os.getenv("GIT_AUTHOR_NAME", "CodeFactoryAgent")
@@ -113,23 +116,60 @@ def prepare_feature_branch(issue_key: str, base_branch: str = "main") -> dict:
         if curr != base_branch and base_branch:
             checkout_base = _git(repo, "checkout", base_branch)
             if checkout_base.returncode != 0:
-                # If checking out local base branch failed, stay on current
                 base_branch = curr or "main"
 
-        # Create or checkout feature branch named after Jira ticket
+        # Identify existing branches on local and remote origin to prevent collisions
+        remote_branches = set()
+        remotes = _git(repo, "remote")
+        if "origin" in remotes.stdout.split():
+            try:
+                ls_remote = _git(repo, "ls-remote", "--heads", "origin", timeout=15)
+                if ls_remote.returncode == 0:
+                    for line in ls_remote.stdout.splitlines():
+                        if "\t" in line:
+                            ref = line.split("\t")[1].strip()
+                            if ref.startswith("refs/heads/"):
+                                remote_branches.add(ref[11:])
+            except Exception:
+                pass
+
+        local_branches = set()
+        lb = _git(repo, "branch", "--list")
+        if lb.returncode == 0:
+            for b in lb.stdout.splitlines():
+                b_clean = b.strip().replace("*", "").strip()
+                if b_clean:
+                    local_branches.add(b_clean)
+
+        # If branch already exists on remote origin or locally, increment counter: KAN-4-1, KAN-4-2, etc.
         feature_branch = clean_key
+        has_collision = (feature_branch in remote_branches) or (feature_branch in local_branches)
+        if has_collision:
+            counter = 1
+            candidate = f"{clean_key}-{counter}"
+            while candidate in remote_branches or candidate in local_branches:
+                counter += 1
+                candidate = f"{clean_key}-{counter}"
+            feature_branch = candidate
+
+        # Create or checkout feature branch
         checkout_feature = _git(repo, "checkout", "-B", feature_branch)
         if checkout_feature.returncode:
             return {"error": f"Failed to create feature branch '{feature_branch}': {checkout_feature.stderr}"}
 
         head = _git(repo, "rev-parse", "--short", "HEAD")
+        msg = (
+            f"Feature branch '{feature_branch}' (iteration suffix added due to existing branch) created from '{base_branch}'."
+            if has_collision
+            else f"Feature branch '{feature_branch}' created from '{base_branch}'. Ready for implementation."
+        )
         return {
             "repository": str(repo),
             "issue_key": clean_key,
             "branch": feature_branch,
             "base_branch": base_branch,
             "head_commit": head.stdout.strip() if head.returncode == 0 else "unknown",
-            "message": f"Feature branch '{feature_branch}' created from '{base_branch}'. Ready for implementation.",
+            "message": msg,
         }
     except (subprocess.TimeoutExpired, OSError) as exc:
         return {"error": str(exc)}

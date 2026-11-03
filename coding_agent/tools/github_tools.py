@@ -64,7 +64,7 @@ def push_and_create_pull_request(
         return {"error": "Target repository is not a Git repository."}
 
     curr_branch = _git(repo, "branch", "--show-current").stdout.strip()
-    branch = clean_key if clean_key else curr_branch
+    branch = curr_branch if curr_branch else clean_key
 
     # Retrieve GitHub token and repository slug
     token = _get_setting("GITHUB_TOKEN") or _get_setting("GH_TOKEN")
@@ -80,11 +80,14 @@ def push_and_create_pull_request(
     jira_base_url = _get_setting("JIRA_BASE_URL").rstrip("/")
     jira_link = f"{jira_base_url}/browse/{clean_key}" if jira_base_url else clean_key
 
-    pr_title = f"[{clean_key}] {summary}" if summary else f"[{clean_key}] Implement requirements"
+    # If branch has an iteration suffix (e.g. KAN-4-1), reflect in PR title
+    iteration_label = f" (Iteration {branch.split('-')[-1]})" if branch != clean_key and branch.startswith(f"{clean_key}-") else ""
+    pr_title = f"[{clean_key}] {summary}{iteration_label}" if summary else f"[{clean_key}] Implement requirements{iteration_label}"
 
     pr_body_lines = [
         "## 📋 Jira Requirements",
         f"- **Ticket:** [{clean_key}]({jira_link})",
+        f"- **Feature Branch:** `{branch}`",
         f"- **Summary:** {summary or 'N/A'}",
         "",
         "### 📝 Description",

@@ -15,10 +15,19 @@ Usage:
 
 import os
 import sys
+import signal
 import argparse
 import asyncio
-from typing import Any
+import subprocess
+from typing import Any, Optional, List
 from pathlib import Path
+
+# Semantic Exit Codes
+EXIT_SUCCESS = 0
+EXIT_CONFIG_ERROR = 1
+EXIT_EXTERNAL_SERVICE_ERROR = 2
+EXIT_VERIFICATION_ERROR = 3
+EXIT_INTERRUPTED = 130
 
 # Ensure the agent root is in sys.path
 AGENT_ROOT = Path(__file__).resolve().parent
@@ -37,6 +46,121 @@ except ImportError:
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+class WorkspaceSession:
+    """Manages repository state and guarantees safe cleanup and rollback on failure or exit."""
+
+    def __init__(self, repo_dir: Path, ticket: str):
+        self.repo = repo_dir
+        self.ticket = ticket
+        self.base_branch = "main"
+        self.feature_branch = ticket
+        self.completed_successfully = False
+
+    def capture_initial_state(self):
+        """Record the active branch before making any changes."""
+        if not (self.repo / ".git").exists():
+            return
+        try:
+            res = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=str(self.repo),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            curr = res.stdout.strip()
+            if curr:
+                self.base_branch = curr
+        except Exception:
+            pass
+
+    def mark_success(self):
+        """Mark session as successfully completed."""
+        self.completed_successfully = True
+
+    def cleanup_on_exit(self, interrupted: bool = False, error_msg: Optional[str] = None):
+        """Restores repository state safely."""
+        if not (self.repo / ".git").exists():
+            return
+
+        if self.completed_successfully:
+            return
+
+        print("\n🧹 [Workspace Cleanup] Restoring target repository safety...")
+        try:
+            # Check for uncommitted working tree changes
+            status = subprocess.run(
+                ["git", "status", "--short"],
+                cwd=str(self.repo),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            is_dirty = bool(status.stdout.strip())
+
+            if is_dirty:
+                if interrupted:
+                    subprocess.run(
+                        ["git", "stash", "save", "-u", f"code-factory-interrupted-{self.ticket}"],
+                        cwd=str(self.repo),
+                        capture_output=True,
+                        check=False,
+                    )
+                    print(f"   • Uncommitted changes safely stashed as 'code-factory-interrupted-{self.ticket}'.")
+                else:
+                    subprocess.run(
+                        ["git", "reset", "--hard", "HEAD"],
+                        cwd=str(self.repo),
+                        capture_output=True,
+                        check=False,
+                    )
+                    subprocess.run(
+                        ["git", "clean", "-fd"],
+                        cwd=str(self.repo),
+                        capture_output=True,
+                        check=False,
+                    )
+                    print(f"   • Discarded uncommitted partial modifications on '{self.feature_branch}'.")
+
+            # Restore base branch (e.g. main)
+            curr = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=str(self.repo),
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout.strip()
+
+            if curr != self.base_branch and self.base_branch:
+                subprocess.run(
+                    ["git", "checkout", self.base_branch],
+                    cwd=str(self.repo),
+                    capture_output=True,
+                    check=False,
+                )
+                print(f"   • Switched repository back to '{self.base_branch}' branch.")
+
+        except Exception as exc:
+            print(f"   ⚠️ Could not fully restore repository: {exc}")
+
+
+_active_session: Optional[WorkspaceSession] = None
+
+
+def _sigint_handler(signum, frame):
+    """Graceful shutdown handler for Ctrl+C and SIGTERM."""
+    print("\n\n⚠️  [Interrupt] Cancellation received (Ctrl+C). Aborting agent execution...")
+    if _active_session:
+        _active_session.cleanup_on_exit(interrupted=True)
+    print("👋 Agent shut down gracefully. Exiting.")
+    sys.exit(EXIT_INTERRUPTED)
+
+
+signal.signal(signal.SIGINT, _sigint_handler)
+if hasattr(signal, "SIGTERM"):
+    signal.signal(signal.SIGTERM, _sigint_handler)
 
 
 def parse_args():
@@ -139,14 +263,16 @@ def print_jira_ticket_banner(jira_data: dict):
     print("=" * 65 + "\n")
 
 
-def print_fatal_error(stage: str, error_message: str, troubleshooting: list = None):
-    """Print a prominent diagnostic halt message with troubleshooting guidance."""
+def print_fatal_error(stage: str, error_message: str, troubleshooting: Optional[List[str]] = None, ticket: str = ""):
+    """Print a prominent diagnostic incident report with troubleshooting guidance."""
     print("\n" + "!" * 65)
-    print(f"❌ AGENT EXECUTION HALTED: {stage}")
+    print(f"🚨 AGENT INCIDENT REPORT: {stage}")
     print("!" * 65)
-    print(f"Cause: {error_message}\n")
+    if ticket:
+        print(f"• Ticket:       {ticket}")
+    print(f"• Root Cause:   {error_message}\n")
     if troubleshooting:
-        print("💡 Troubleshooting Suggestions:")
+        print("💡 Suggested Troubleshooting Actions:")
         for item in troubleshooting:
             print(f"   • {item}")
     print("!" * 65 + "\n")
@@ -180,6 +306,38 @@ def _log_tool_step(step: int, tool_name: str, tool_args: dict, result: Any, tick
         print(f"   • Branch:     {result.get('branch', 'unknown')} (branched from '{result.get('base_branch', 'main')}')")
         print(f"   • Base Commit:{result.get('head_commit', 'unknown')}")
         print(f"   • Repository: {result.get('repository', 'unknown')}")
+
+    elif tool_name == "get_architecture_graph":
+        print(f"🗺️  [Step {step}] Code Graph Architecture Ingested:")
+        print(f"   • Endpoints:  {result.get('total_endpoints', 0)} REST endpoints mapped")
+        for ep in result.get("endpoints", [])[:5]:
+            print(f"     ↳ {ep.get('method')} {ep.get('path')} ➔ {ep.get('controller')}.{ep.get('handler')}")
+        if len(result.get("endpoints", [])) > 5:
+            print(f"     ↳ ... (+{len(result.get('endpoints', [])) - 5} more routes)")
+        services = [s.get("name") for s in result.get("services", [])]
+        repos = [r.get("name") for r in result.get("repositories", [])]
+        entities = [e.get("name") for e in result.get("entities", [])]
+        print(f"   • Services:   {', '.join(services) if services else 'None'}")
+        print(f"   • Repos:      {', '.join(repos) if repos else 'None'}")
+        print(f"   • Entities:   {', '.join(entities) if entities else 'None'}")
+
+    elif tool_name == "query_code_graph":
+        q_type = tool_args.get("query_type", "")
+        target = tool_args.get("target", "")
+        print(f"🔎 [Step {step}] Code Graph Query: {q_type}(target='{target}')")
+        if "results" in result:
+            print(f"   • Matches:    {len(result.get('results', []))} items found")
+            for item in result.get("results", [])[:3]:
+                print(f"     ↳ {item.get('endpoint', item.get('symbol', ''))}")
+        elif "matches" in result:
+            print(f"   • Matches:    {len(result.get('matches', []))} symbol declarations")
+            for m in result.get("matches", [])[:2]:
+                print(f"     ↳ {m.get('file')}:{m.get('line')}")
+        elif "impacted_components" in result:
+            print(f"   • Blast Radius: {result.get('summary', '')}")
+        else:
+            keys = [k for k in result.keys() if k != "error"][:3]
+            print(f"   • Details:    {', '.join(keys)}")
 
     elif tool_name == "list_project_files":
         entries = result.get("entries", [])
@@ -245,7 +403,7 @@ def _log_tool_step(step: int, tool_name: str, tool_args: dict, result: Any, tick
     print("─" * 65)
 
 
-async def run_simulation_mode(ticket: str) -> int:
+async def run_simulation_mode(ticket: str, session: WorkspaceSession) -> int:
     """Run simulated agent pipeline without live Gemini API key for offline verification."""
     from coding_agent.tools.jira_tools import get_jira_issue
     from coding_agent.tools.repository_tools import (
@@ -258,6 +416,7 @@ async def run_simulation_mode(ticket: str) -> int:
         commit_changes,
     )
     from coding_agent.tools.github_tools import push_and_create_pull_request
+    from coding_agent.tools.codegraph_tools import get_architecture_graph
 
     print("\n[Simulation Mode] Executing end-to-end tool pipeline...")
 
@@ -265,58 +424,51 @@ async def run_simulation_mode(ticket: str) -> int:
     jira_res = get_jira_issue(ticket)
     _log_tool_step(1, "get_jira_issue", {"issue_key": ticket}, jira_res, ticket)
     if "error" in jira_res:
-        print_fatal_error(
-            stage=f"Failed to fetch Jira ticket '{ticket}'",
-            error_message=jira_res["error"],
-            troubleshooting=[
-                "Check that the ticket key format is valid (e.g. KAN-4, DEMO-1)",
-                "Ensure JIRA_BASE_URL, JIRA_EMAIL, and JIRA_API_TOKEN are configured in code-factory/.env",
-                "Or pass --mock to run in offline mock mode with built-in ticket specs",
-            ],
-        )
-        return 1
+        return EXIT_EXTERNAL_SERVICE_ERROR
 
     # Step 2: Prepare Feature Branch
     branch_res = prepare_feature_branch(ticket)
     _log_tool_step(2, "prepare_feature_branch", {"issue_key": ticket}, branch_res, ticket)
     if "error" in branch_res:
-        print_fatal_error(
-            stage=f"Failed to prepare feature branch '{ticket}'",
-            error_message=branch_res["error"],
-        )
-        return 1
+        return EXIT_CONFIG_ERROR
 
-    # Step 3: Inspect Project & Ingest Context
+    # Step 3: Ingest Code Graph Architecture
+    graph_res = get_architecture_graph()
+    _log_tool_step(3, "get_architecture_graph", {}, graph_res, ticket)
+
+    # Step 4: Inspect Project & Ingest Context
     files_res = list_project_files()
-    _log_tool_step(3, "list_project_files", {}, files_res, ticket)
+    _log_tool_step(4, "list_project_files", {}, files_res, ticket)
 
-    # Step 4: Run Tests
+    # Step 5: Run Tests
     test_res = run_project_tests(ticket)
-    _log_tool_step(4, "run_project_tests", {"issue_key": ticket}, test_res, ticket)
+    _log_tool_step(5, "run_project_tests", {"issue_key": ticket}, test_res, ticket)
 
-    # Step 5: Git Status & Diff
+    # Step 6: Git Status & Diff
     status_res = get_git_status()
-    _log_tool_step(5, "get_git_status", {}, status_res, ticket)
+    _log_tool_step(6, "get_git_status", {}, status_res, ticket)
 
-    # Step 6: PR creation simulation
+    # Step 7: PR creation simulation
     pr_res = push_and_create_pull_request(
         issue_key=ticket,
         summary=jira_res.get("summary", ""),
         description=jira_res.get("description", ""),
         acceptance_criteria=jira_res.get("acceptance_criteria", ""),
-        changes_summary="Agent verified workspace, read ARCHITECTURE.md/DOMAIN_SPEC.md, and validated requirements.",
+        changes_summary="Agent verified workspace, read Code Graph architecture, and validated requirements.",
         test_summary=test_res.get("output_tail", "All tests verified."),
     )
-    _log_tool_step(6, "push_and_create_pull_request", {}, pr_res, ticket)
+    _log_tool_step(7, "push_and_create_pull_request", {}, pr_res, ticket)
 
+    session.mark_success()
     print("\n" + "=" * 65)
     print("🎉 Offline pipeline validation succeeded!")
     print("=" * 65)
-    return 0
+    return EXIT_SUCCESS
 
 
 async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
-    """Execute the agent autonomously."""
+    """Execute the agent autonomously with workspace state preservation and error handling."""
+    global _active_session
     from coding_agent.tools.jira_tools import get_jira_issue
 
     print("=" * 65)
@@ -338,161 +490,215 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
                 "Ensure sample-springboot-app exists at that location",
                 "Specify --repo-dir <path> explicitly when invoking run_agent.py",
             ],
+            ticket=ticket,
         )
-        return 1
+        return EXIT_CONFIG_ERROR
 
-    # Pre-flight Check: Read and validate Jira story immediately
-    print(f"🔍 [Pre-flight] Retrieving and validating Jira requirements for '{ticket}'...")
-    jira_data = get_jira_issue(ticket)
-    if "error" in jira_data:
-        print_fatal_error(
-            stage=f"Failed to Retrieve Jira Ticket '{ticket}'",
-            error_message=jira_data["error"],
-            troubleshooting=[
-                "Verify JIRA_BASE_URL in code-factory/.env (e.g., https://your-domain.atlassian.net with no trailing slash)",
-                "Verify JIRA_EMAIL matches your Atlassian account email address exactly",
-                "Verify JIRA_API_TOKEN is a valid active token generated from https://id.atlassian.com/manage-profile/security/api-tokens",
-                f"Verify that ticket '{ticket}' exists in your Jira project and is accessible by your account",
-                "If you want to run without Jira credentials, use --mock to run with built-in test tickets",
-            ],
-        )
-        return 1
+    # Initialize Workspace Session for automated rollback and cleanup
+    session = WorkspaceSession(target_repo_path, ticket)
+    session.capture_initial_state()
+    _active_session = session
 
-    # Successfully retrieved Jira ticket: print complete ticket summary banner
-    print_jira_ticket_banner(jira_data)
-
-    # If in mock mode or Gemini API key is missing, execute simulation runner
-    has_api_key = bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
-    if is_mock or not has_api_key:
-        if not has_api_key:
-            print("ℹ️  [Notice] No GOOGLE_API_KEY found in environment. Running in offline simulation mode.")
-        return await run_simulation_mode(ticket)
-
-    # Live Gemini AI execution via official google.genai SDK with multi-turn tool calling loop
     try:
-        from google import genai
-        from google.genai import types
-        from coding_agent.agent import root_agent
-        from coding_agent.tools import (
-            get_jira_issue,
-            prepare_feature_branch,
-            list_project_files,
-            read_project_file,
-            write_project_file,
-            run_project_tests,
-            get_git_status,
-            get_git_diff,
-            commit_changes,
-            push_and_create_pull_request,
-        )
+        # Pre-flight Check: Read and validate Jira story immediately
+        print(f"🔍 [Pre-flight] Retrieving and validating Jira requirements for '{ticket}'...")
+        jira_data = get_jira_issue(ticket)
+        if "error" in jira_data:
+            print_fatal_error(
+                stage=f"Failed to Retrieve Jira Ticket '{ticket}'",
+                error_message=jira_data["error"],
+                troubleshooting=[
+                    "Verify JIRA_BASE_URL in code-factory/.env (e.g., https://your-domain.atlassian.net with no trailing slash)",
+                    "Verify JIRA_EMAIL matches your Atlassian account email address exactly",
+                    "Verify JIRA_API_TOKEN is a valid active token generated from https://id.atlassian.com/manage-profile/security/api-tokens",
+                    f"Verify that ticket '{ticket}' exists in your Jira project and is accessible by your account",
+                    "If you want to run without Jira credentials, use --mock to run with built-in test tickets",
+                ],
+                ticket=ticket,
+            )
+            return EXIT_EXTERNAL_SERVICE_ERROR
 
-        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-        client = genai.Client(api_key=api_key)
+        # Successfully retrieved Jira ticket: print complete ticket summary banner
+        print_jira_ticket_banner(jira_data)
 
-        tools = [
-            get_jira_issue,
-            prepare_feature_branch,
-            list_project_files,
-            read_project_file,
-            write_project_file,
-            run_project_tests,
-            get_git_status,
-            get_git_diff,
-            commit_changes,
-            push_and_create_pull_request,
-        ]
-        tool_map = {fn.__name__: fn for fn in tools}
+        # If in mock mode or Gemini API key is missing, execute simulation runner
+        has_api_key = bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
+        if is_mock or not has_api_key:
+            if not has_api_key:
+                print("ℹ️  [Notice] No GOOGLE_API_KEY found in environment. Running in offline simulation mode.")
+            return await run_simulation_mode(ticket, session)
 
-        prompt = (
-            f"Please implement the requirements and acceptance criteria for Jira ticket '{ticket}'.\n"
-            f"Ticket summary: {jira_data.get('summary')}\n\n"
-            f"Workflow instructions:\n"
-            f"1. Call prepare_feature_branch with issue_key='{ticket}' to create/switch to the feature branch.\n"
-            f"2. Call list_project_files and read_project_file to read ARCHITECTURE.md, DOMAIN_SPEC.md, and openapi.yml.\n"
-            f"3. Read existing Java code in src/main/java and tests in src/test/java.\n"
-            f"4. Implement all required changes using write_project_file (Java code, tests, and updating openapi.yml).\n"
-            f"5. Call run_project_tests to verify the implementation.\n"
-            f"6. Call get_git_diff and get_git_status to review changes.\n"
-            f"7. Call commit_changes with a message like 'feat({ticket}): ...'.\n"
-            f"8. Call push_and_create_pull_request to submit the Pull Request for human review.\n"
-            f"9. Output your final summary."
-        )
+        # Live Gemini AI execution via official google.genai SDK with multi-turn tool calling loop
+        try:
+            from google import genai
+            from google.genai import types
+            from coding_agent.agent import root_agent
+            from coding_agent.tools import (
+                get_jira_issue,
+                prepare_feature_branch,
+                get_architecture_graph,
+                query_code_graph,
+                list_project_files,
+                read_project_file,
+                write_project_file,
+                run_project_tests,
+                get_git_status,
+                get_git_diff,
+                commit_changes,
+                push_and_create_pull_request,
+            )
 
-        print(f"🤖 Invoking Gemini ({model}) with autonomous multi-step reasoning...")
-        chat = client.chats.create(
-            model=model,
-            config=types.GenerateContentConfig(
-                system_instruction=root_agent.instruction,
-                tools=tools,
-            ),
-        )
+            api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+            model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+            client = genai.Client(api_key=api_key)
 
-        # Initial turn
-        response = chat.send_message(prompt)
+            tools = [
+                get_jira_issue,
+                prepare_feature_branch,
+                get_architecture_graph,
+                query_code_graph,
+                list_project_files,
+                read_project_file,
+                write_project_file,
+                run_project_tests,
+                get_git_status,
+                get_git_diff,
+                commit_changes,
+                push_and_create_pull_request,
+            ]
+            tool_map = {fn.__name__: fn for fn in tools}
 
-        step = 1
-        max_steps = 30
+            prompt = (
+                f"Please implement the requirements and acceptance criteria for Jira ticket '{ticket}'.\n"
+                f"Ticket summary: {jira_data.get('summary')}\n\n"
+                f"Workflow instructions:\n"
+                f"1. Call prepare_feature_branch with issue_key='{ticket}' to create/switch to the feature branch.\n"
+                f"2. Call get_architecture_graph to immediately inspect all Spring controllers, endpoints, services, and repositories.\n"
+                f"3. Call read_project_file to read ARCHITECTURE.md, DOMAIN_SPEC.md, and openapi.yml.\n"
+                f"4. Read existing Java code in src/main/java and tests in src/test/java.\n"
+                f"5. Implement all required changes using write_project_file (Java code, tests, and updating openapi.yml).\n"
+                f"6. Call run_project_tests to verify the implementation.\n"
+                f"7. Call get_git_diff and get_git_status to review changes.\n"
+                f"8. Call commit_changes with a message like 'feat({ticket}): ...'.\n"
+                f"9. Call push_and_create_pull_request to submit the Pull Request for human review.\n"
+                f"10. Output your final summary."
+            )
 
-        while response.function_calls and step <= max_steps:
-            tool_responses = []
-            for call in response.function_calls:
-                tool_name = call.name
-                tool_args = call.args or {}
+            print(f"🤖 Invoking Gemini ({model}) with autonomous multi-step reasoning...")
+            chat = client.chats.create(
+                model=model,
+                config=types.GenerateContentConfig(
+                    system_instruction=root_agent.instruction,
+                    tools=tools,
+                ),
+            )
 
-                if tool_name in tool_map:
-                    try:
-                        fn_result = tool_map[tool_name](**tool_args)
-                    except Exception as e:
-                        fn_result = {"error": str(e)}
-                else:
-                    fn_result = {"error": f"Unknown tool: {tool_name}"}
+            response = chat.send_message(prompt)
 
-                # Log informative, rich step output
-                _log_tool_step(step, tool_name, tool_args, fn_result, ticket)
+            step = 1
+            max_steps = 30
+            last_branch = ticket
+            last_commit = None
+            pr_error = None
+            pr_url = None
 
-                # Fail-fast check on critical errors
-                if isinstance(fn_result, dict) and "error" in fn_result:
-                    if tool_name in ("prepare_feature_branch", "initialize_workspace"):
-                        print_fatal_error(
-                            stage=f"Git Branching Failure for '{ticket}'",
-                            error_message=fn_result["error"],
-                            troubleshooting=[
-                                "Check if target repository is a valid Git repo",
-                                "Ensure no merge conflicts or uncommitted blocking changes exist",
-                            ],
+            while response.function_calls and step <= max_steps:
+                tool_responses = []
+                for call in response.function_calls:
+                    tool_name = call.name
+                    tool_args = call.args or {}
+
+                    if tool_name in tool_map:
+                        try:
+                            fn_result = tool_map[tool_name](**tool_args)
+                        except Exception as e:
+                            fn_result = {"error": str(e)}
+                    else:
+                        fn_result = {"error": f"Unknown tool: {tool_name}"}
+
+                    _log_tool_step(step, tool_name, tool_args, fn_result, ticket)
+
+                    if isinstance(fn_result, dict):
+                        if fn_result.get("branch"):
+                            last_branch = fn_result["branch"]
+                            session.feature_branch = last_branch
+                        if fn_result.get("commit"):
+                            last_commit = fn_result["commit"]
+                        if tool_name == "push_and_create_pull_request":
+                            if "error" in fn_result:
+                                pr_error = fn_result["error"]
+                            elif fn_result.get("pull_request_url"):
+                                pr_url = fn_result["pull_request_url"]
+
+                    # Fail-fast check on critical errors
+                    if isinstance(fn_result, dict) and "error" in fn_result:
+                        if tool_name in ("prepare_feature_branch", "initialize_workspace"):
+                            print_fatal_error(
+                                stage=f"Git Branching Failure for '{ticket}'",
+                                error_message=fn_result["error"],
+                                troubleshooting=[
+                                    "Check if target repository is a valid Git repo",
+                                    "Ensure no merge conflicts or uncommitted blocking changes exist",
+                                ],
+                                ticket=ticket,
+                            )
+                            return EXIT_CONFIG_ERROR
+
+                    tool_responses.append(
+                        types.Part.from_function_response(
+                            name=tool_name,
+                            response={"result": fn_result},
                         )
-                        return 1
-
-                tool_responses.append(
-                    types.Part.from_function_response(
-                        name=tool_name,
-                        response={"result": fn_result},
                     )
-                )
 
-            step += 1
-            # Send tool outputs back to Gemini
-            response = chat.send_message(tool_responses)
+                step += 1
+                response = chat.send_message(tool_responses)
 
-        print("\n" + "=" * 65)
-        print("🎉 CodeFactoryAgent Autonomous Execution Finished!")
-        print("=" * 65)
-        if response.text:
-            print(response.text)
-        return 0
+            if last_commit:
+                # Local commit succeeded; mark session complete so cleanup does not discard work
+                session.mark_success()
 
-    except Exception as exc:
-        print_fatal_error(
-            stage="Gemini AI Invocation Failed",
-            error_message=str(exc),
-            troubleshooting=[
-                "Verify GOOGLE_API_KEY in code-factory/.env is correct and active",
-                "Ensure your Gemini model name is valid (e.g. gemini-2.5-flash)",
-                "Check network connectivity to https://generativelanguage.googleapis.com",
-            ],
-        )
-        return 1
+            print("\n" + "=" * 65)
+            if pr_error:
+                print("⚠️  CodeFactoryAgent Finished with Warnings / Incomplete PR:")
+            else:
+                print("🎉 CodeFactoryAgent Autonomous Execution Finished Successfully!")
+            print("=" * 65)
+            if response.text:
+                print(response.text)
+
+            if pr_error:
+                print("\n" + "!" * 65)
+                print("🚨 PULL REQUEST CREATION FAILED")
+                print("!" * 65)
+                print(f"• Ticket:       {ticket}")
+                print(f"• Branch:       {last_branch} (All code and tests committed locally)")
+                if last_commit:
+                    print(f"• Commit SHA:   {last_commit}")
+                print(f"• Root Cause:   {pr_error}")
+                print("\n💡 Manual Push Command:")
+                print(f"   git -C \"{target_repo_path}\" push -u origin {last_branch}")
+                print("!" * 65 + "\n")
+                return EXIT_EXTERNAL_SERVICE_ERROR
+
+            return EXIT_SUCCESS
+
+        except Exception as exc:
+            print_fatal_error(
+                stage="Gemini AI Invocation Failed",
+                error_message=str(exc),
+                troubleshooting=[
+                    "Verify GOOGLE_API_KEY in code-factory/.env is correct and active",
+                    "Ensure your Gemini model name is valid (e.g. gemini-2.5-flash)",
+                    "Check network connectivity to https://generativelanguage.googleapis.com",
+                ],
+                ticket=ticket,
+            )
+            return EXIT_EXTERNAL_SERVICE_ERROR
+
+    finally:
+        # Guarantee repository safety and restoration on failure or exit
+        session.cleanup_on_exit()
 
 
 def main():
@@ -513,7 +719,7 @@ def main():
                     "Or set JIRA_ISSUE_KEY in code-factory/.env",
                 ],
             )
-            sys.exit(1)
+            sys.exit(EXIT_CONFIG_ERROR)
 
     exit_code = asyncio.run(run_agent_async(ticket, is_mock=args.mock))
     sys.exit(exit_code)
