@@ -1,0 +1,83 @@
+name: 'Code Factory Agent'
+description: 'Autonomous software engineering agent that implements Jira story requirements, commits changes, and opens a Pull Request.'
+author: 'CodeFactory'
+
+inputs:
+  jira_ticket_number:
+    description: 'Jira ticket number / issue key (e.g. DEMO-1 or PROJ-123)'
+    required: true
+  jira_base_url:
+    description: 'Base URL of your Atlassian Jira instance (e.g. https://your-domain.atlassian.net)'
+    required: false
+    default: ''
+  jira_email:
+    description: 'Email associated with Jira API token'
+    required: false
+    default: ''
+  jira_api_token:
+    description: 'Atlassian Jira API token'
+    required: false
+    default: ''
+  gemini_api_key:
+    description: 'Google Gemini API key'
+    required: false
+    default: ''
+  gemini_model:
+    description: 'Gemini model name'
+    required: false
+    default: 'gemini-2.5-flash'
+  github_token:
+    description: 'GitHub token for pushing branches and creating PRs (e.g. secrets.GITHUB_TOKEN)'
+    required: false
+    default: ${{ github.token }}
+  target_repo_dir:
+    description: 'Path to target repository workspace'
+    required: false
+    default: ${{ github.workspace }}
+  mock_mode:
+    description: 'Enable mock mode for testing without live Jira or Gemini API keys'
+    required: false
+    default: 'false'
+  dry_run:
+    description: 'Simulate git push and PR creation without modifying remote repository'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+        cache-dependency-path: '${{ github.action_path }}/requirements.txt'
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r "${{ github.action_path }}/requirements.txt"
+
+    - name: Run CodeFactoryAgent
+      shell: bash
+      env:
+        GOOGLE_API_KEY: ${{ inputs.gemini_api_key }}
+        GEMINI_MODEL: ${{ inputs.gemini_model }}
+        JIRA_BASE_URL: ${{ inputs.jira_base_url }}
+        JIRA_EMAIL: ${{ inputs.jira_email }}
+        JIRA_API_TOKEN: ${{ inputs.jira_api_token }}
+        JIRA_ISSUE_KEY: ${{ inputs.jira_ticket_number }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        TARGET_REPO_DIR: ${{ inputs.target_repo_dir }}
+        MOCK_MODE: ${{ inputs.mock_mode }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        EXTRA_FLAGS=""
+        if [ "${{ inputs.mock_mode }}" = "true" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --mock"
+        fi
+        if [ "${{ inputs.dry_run }}" = "true" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --dry-run"
+        fi
+        python "${{ github.action_path }}/run_agent.py" --ticket "${{ inputs.jira_ticket_number }}" --repo-dir "${{ inputs.target_repo_dir }}" $EXTRA_FLAGS
