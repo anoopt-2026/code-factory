@@ -150,7 +150,7 @@ on:
 jobs:
   run-agent:
     name: 'Run CodeFactoryAgent'
-    uses: abhishexing/Code-Factory-Agent/.github/workflows/agent-runner.yml@main
+    uses: anoopt-2026/code-factory/.github/workflows/agent-runner.yml@main
     with:
       jira_ticket_number: ${{ inputs.jira_ticket_number || github.event.client_payload.ticket_number }}
       mock_mode: ${{ inputs.mock_mode || false }}

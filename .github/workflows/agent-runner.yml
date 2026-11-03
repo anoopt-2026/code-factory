@@ -52,7 +52,7 @@ jobs:
       - name: Checkout CodeFactoryAgent Engine
         uses: actions/checkout@v4
         with:
-          repository: abhishexing/Code-Factory-Agent
+          repository: anoopt-2026/code-factory
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
           path: .code-factory-agent
           ref: main
