@@ -239,6 +239,26 @@ def _log_tool_step(step: int, tool_name: str, tool_args: dict, result: Any, tick
         print(f"   • PR Link:    {result.get('pull_request_url', 'N/A')}")
         print(f"   • Target:     {result.get('branch', ticket)} ➔ {result.get('base_branch', 'main')}")
         print(f"   • Summary:    {result.get('message', '')}")
+    elif tool_name == "search_symbols":
+        print(f"🔍 [Step {step}] CodeGraph Symbol Search:")
+        print(f"   • Query:      {tool_args.get('query')}")
+        print(f"   • Matches:    {result.get('total_matches', len(result.get('symbols', [])))}")
+    elif tool_name == "get_symbol_definition":
+        print(f"📖 [Step {step}] CodeGraph Symbol Definition:")
+        print(f"   • Symbol:     {result.get('name', tool_args.get('symbol_name'))}")
+        print(f"   • File:       {result.get('file_path', 'N/A')}")
+    elif tool_name == "find_callers_and_callees":
+        print(f"🕸️  [Step {step}] CodeGraph Call Graph Traversal:")
+        print(f"   • Symbol:     {result.get('symbol', tool_args.get('symbol_name'))}")
+        print(f"   • Inbound:    {len(result.get('callers_inbound', []))} callers")
+        print(f"   • Outbound:   {len(result.get('callees_outbound', []))} callees")
+    elif tool_name == "get_dependency_context":
+        print(f"📦 [Step {step}] CodeGraph Bounded Context Package:")
+        print(f"   • Symbol:     {result.get('name', tool_args.get('symbol_name'))}")
+        print(f"   • Tests:      {len(result.get('related_tests', []))} related tests")
+    elif tool_name == "get_code_graph_summary":
+        print(f"🗺️  [Step {step}] CodeGraph Architectural Summary:")
+        print(f"   • Files:      {result.get('files_count', 0)} files ({result.get('symbols_count', 0)} symbols)")
     else:
         print(f"⚙️  [Step {step}] {tool_name} completed successfully.")
 
@@ -384,7 +404,21 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
             get_git_diff,
             commit_changes,
             push_and_create_pull_request,
+            search_symbols,
+            get_symbol_definition,
+            find_callers_and_callees,
+            get_dependency_context,
+            get_code_graph_summary,
         )
+        from coding_agent.services.codegraph_service import CodeGraphService
+
+        # Pre-flight Check: Initialize CodeGraph index if available
+        if CodeGraphService.is_enabled() and CodeGraphService.is_parser_available():
+            print("🧠 [Pre-flight] Initializing CodeGraph repository intelligence...")
+            cg_svc = CodeGraphService.get_instance(target_repo_path)
+            idx_res = cg_svc.ensure_indexed()
+            if idx_res.get("status") == "success":
+                print(f"   • CodeGraph indexed {idx_res.get('indexed_files', 0)} files in repository.")
 
         api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
@@ -401,6 +435,11 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
             get_git_diff,
             commit_changes,
             push_and_create_pull_request,
+            search_symbols,
+            get_symbol_definition,
+            find_callers_and_callees,
+            get_dependency_context,
+            get_code_graph_summary,
         ]
         tool_map = {fn.__name__: fn for fn in tools}
 
@@ -409,9 +448,12 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
             f"Ticket summary: {jira_data.get('summary')}\n\n"
             f"Workflow instructions:\n"
             f"1. Call prepare_feature_branch with issue_key='{ticket}' to create/switch to the feature branch.\n"
-            f"2. Call list_project_files and read_project_file to read ARCHITECTURE.md, DOMAIN_SPEC.md, and openapi.yml.\n"
-            f"3. Read existing Java code in src/main/java and tests in src/test/java.\n"
-            f"4. Implement all required changes using write_project_file (Java code, tests, and updating openapi.yml).\n"
+            f"2. Read living documentation (ARCHITECTURE.md, DOMAIN_SPEC.md, openapi.yml) using read_project_file if present.\n"
+            f"3. MANDATORY CODEGRAPH CODE EXPLORATION: Before writing code or reading whole files, you MUST use CodeGraph:\n"
+            f"   - Call search_symbols with relevant keywords (e.g. 'Project', 'Employee', 'Assignment') to find domain entities, services, and repositories.\n"
+            f"   - Call get_symbol_definition to inspect signatures, annotations, and code snippets for target classes.\n"
+            f"   - Call find_callers_and_callees or get_dependency_context to see how existing services and endpoints interact.\n"
+            f"4. Implement all required changes using write_project_file (Java code, migrations, tests, and updating openapi.yml).\n"
             f"5. Call run_project_tests to verify the implementation.\n"
             f"6. Call get_git_diff and get_git_status to review changes.\n"
             f"7. Call commit_changes with a message like 'feat({ticket}): ...'.\n"
@@ -428,8 +470,18 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
             ),
         )
 
-        # Initial turn
+        # Initial turn & token tracking
         response = chat.send_message(prompt)
+        total_prompt_tokens = 0
+        total_candidate_tokens = 0
+
+        initial_meta = getattr(response, "usage_metadata", None)
+        if initial_meta:
+            p_cnt = getattr(initial_meta, "prompt_token_count", 0) or 0
+            c_cnt = getattr(initial_meta, "candidates_token_count", 0) or 0
+            total_prompt_tokens += p_cnt
+            total_candidate_tokens += c_cnt
+            print(f"📊 [Turn 1 Initial] Prompt Tokens: {p_cnt} | Output Tokens: {c_cnt}")
 
         step = 1
         max_steps = 30
@@ -475,8 +527,18 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
             # Send tool outputs back to Gemini
             response = chat.send_message(tool_responses)
 
+            turn_meta = getattr(response, "usage_metadata", None)
+            if turn_meta:
+                p_cnt = getattr(turn_meta, "prompt_token_count", 0) or 0
+                c_cnt = getattr(turn_meta, "candidates_token_count", 0) or 0
+                total_prompt_tokens += p_cnt
+                total_candidate_tokens += c_cnt
+                print(f"📊 [Turn {step} Response] Prompt Tokens: {p_cnt} | Output Tokens: {c_cnt}")
+
         print("\n" + "=" * 65)
         print("🎉 CodeFactoryAgent Autonomous Execution Finished!")
+        if total_prompt_tokens > 0 or total_candidate_tokens > 0:
+            print(f"📊 Cumulative Usage: {total_prompt_tokens} prompt tokens, {total_candidate_tokens} candidate tokens ({total_prompt_tokens + total_candidate_tokens} total tokens)")
         print("=" * 65)
         if response.text:
             print(response.text)

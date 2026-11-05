@@ -14,6 +14,7 @@ __pycache__/
 
 # Agent & SQLite session databases
 .adk/
+.codegraph/
 *.db
 *.sqlite
 *.sqlite3

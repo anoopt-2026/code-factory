@@ -11,6 +11,13 @@ from .repository_tools import (
     commit_changes,
 )
 from .github_tools import push_and_create_pull_request
+from .codegraph_tools import (
+    search_symbols,
+    get_symbol_definition,
+    find_callers_and_callees,
+    get_dependency_context,
+    get_code_graph_summary,
+)
 
 __all__ = [
     "get_jira_issue",
@@ -25,4 +32,9 @@ __all__ = [
     "get_git_diff",
     "commit_changes",
     "push_and_create_pull_request",
+    "search_symbols",
+    "get_symbol_definition",
+    "find_callers_and_callees",
+    "get_dependency_context",
+    "get_code_graph_summary",
 ]

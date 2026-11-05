@@ -3,3 +3,6 @@ google-genai
 python-dotenv
 requests
 pytest
+tree-sitter
+tree-sitter-java
+

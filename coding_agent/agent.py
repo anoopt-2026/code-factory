@@ -27,6 +27,13 @@ from .tools.repository_tools import (
     commit_changes,
 )
 from .tools.github_tools import push_and_create_pull_request
+from .tools.codegraph_tools import (
+    search_symbols,
+    get_symbol_definition,
+    find_callers_and_callees,
+    get_dependency_context,
+    get_code_graph_summary,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
@@ -51,13 +58,13 @@ MANDATORY WORKFLOW:
    Call prepare_feature_branch with the returned issue_key. This checks out the base branch (main) and
    creates/switches to a dedicated feature branch named after the Jira ticket (e.g., DEMO-1).
 
-3. EXPLORE REPOSITORY & INGEST CONTEXT:
-   Call list_project_files to discover repository layout.
-   CRITICAL CONTEXT MANDATE: You MUST read the living documentation files before planning or writing code:
-   - ARCHITECTURE.md: Ingest architectural patterns, layering rules, HTTP status conventions, and exception handling standards.
-   - DOMAIN_SPEC.md: Ingest business rules, field validations, and entity invariants.
-   - src/main/resources/static/openapi.yml (or API spec): Ingest existing REST contracts and endpoints.
-   - Relevant source code: Read existing entities, controllers, services, repositories, and test classes.
+3. EXPLORE REPOSITORY WITH CODEGRAPH & INGEST CONTEXT:
+   a) INGEST LIVING DOCUMENTATION: Call read_project_file for ARCHITECTURE.md, DOMAIN_SPEC.md, and openapi.yml (if present).
+   b) MANDATORY CODEGRAPH EXPLORATION: For all Java code understanding, you MUST use CodeGraph tools rather than blindly reading raw source files:
+      - Call search_symbols with keywords from the Jira ticket (e.g. 'Project', 'Employee', 'Assignment') to find relevant entities, controllers, services, and repositories.
+      - Call get_symbol_definition to inspect signatures, annotations, and code snippets for target classes.
+      - Call find_callers_and_callees and get_dependency_context to discover how existing services and endpoints interact before writing new code.
+      - Only use read_project_file for non-code files (like YAML, SQL migrations, Gradle/Maven build files) or when full file context is strictly necessary.
 
 4. PLAN SURGICAL IMPLEMENTATION:
    Design the minimal, idiomatic changes required to satisfy all acceptance criteria while adhering strictly
@@ -116,5 +123,10 @@ SAFETY & OPERATIONAL RULES:
         get_git_diff,
         commit_changes,
         push_and_create_pull_request,
+        search_symbols,
+        get_symbol_definition,
+        find_callers_and_callees,
+        get_dependency_context,
+        get_code_graph_summary,
     ],
 )
