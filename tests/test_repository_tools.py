@@ -70,6 +70,20 @@ class TestRepositoryTools(unittest.TestCase):
         self.assertTrue(test_res.get("tests_passed"))
         self.assertEqual(test_res.get("exit_code"), 0)
 
+    def test_prepare_feature_branch_collision_counter(self):
+        from coding_agent.tools.repository_tools import prepare_feature_branch
+        # First preparation: creates KAN-4
+        b1 = prepare_feature_branch("KAN-4")
+        self.assertEqual(b1.get("branch"), "KAN-4")
+
+        # Second preparation when KAN-4 is already present in local branch list: creates KAN-4-1
+        b2 = prepare_feature_branch("KAN-4")
+        self.assertEqual(b2.get("branch"), "KAN-4-1")
+
+        # Third preparation: creates KAN-4-2
+        b3 = prepare_feature_branch("KAN-4")
+        self.assertEqual(b3.get("branch"), "KAN-4-2")
+
 
 if __name__ == "__main__":
     unittest.main()

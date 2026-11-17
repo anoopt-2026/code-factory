@@ -1,7 +1,7 @@
+
 """Unit tests for CodeGraph tools and service layer."""
 
 import os
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,7 +18,7 @@ from coding_agent.tools.codegraph_tools import (
 
 
 class TestCodeGraphTools(unittest.TestCase):
-    """Test suite verifying CodeGraph tools query parsing, path sandboxing, and graceful fallback."""
+    """Test CodeGraph tools, indexing, path isolation, and graceful fallback."""
 
     SAMPLE_JAVA_ENTITY = """package com.demo.employee.entity;
 
@@ -104,136 +104,220 @@ public class EmployeeValidationTest {
         self.temp_dir = tempfile.TemporaryDirectory()
         self.repo_dir = Path(self.temp_dir.name).resolve()
 
-        # Build realistic Spring Boot directory structure
-        src_main = self.repo_dir / "src" / "main" / "java" / "com" / "demo" / "employee"
-        src_test = self.repo_dir / "src" / "test" / "java" / "com" / "demo" / "employee" / "controller"
+        self.original_target = os.environ.get("TARGET_REPO_DIR")
+        self.original_enabled = os.environ.get("CODEGRAPH_ENABLED")
+
+        # Create a realistic Spring Boot directory structure.
+        src_main = (
+            self.repo_dir
+            / "src"
+            / "main"
+            / "java"
+            / "com"
+            / "demo"
+            / "employee"
+        )
+        src_test = (
+            self.repo_dir
+            / "src"
+            / "test"
+            / "java"
+            / "com"
+            / "demo"
+            / "employee"
+            / "controller"
+        )
+
         (src_main / "entity").mkdir(parents=True)
         (src_main / "service").mkdir(parents=True)
         (src_main / "controller").mkdir(parents=True)
         src_test.mkdir(parents=True)
 
-        (src_main / "entity" / "Employee.java").write_text(self.SAMPLE_JAVA_ENTITY, encoding="utf-8")
-        (src_main / "service" / "EmployeeService.java").write_text(self.SAMPLE_JAVA_SERVICE, encoding="utf-8")
-        (src_main / "controller" / "EmployeeController.java").write_text(self.SAMPLE_JAVA_CONTROLLER, encoding="utf-8")
-        (src_test / "EmployeeValidationTest.java").write_text(self.SAMPLE_JAVA_TEST, encoding="utf-8")
+        (src_main / "entity" / "Employee.java").write_text(
+            self.SAMPLE_JAVA_ENTITY, encoding="utf-8"
+        )
+        (src_main / "service" / "EmployeeService.java").write_text(
+            self.SAMPLE_JAVA_SERVICE, encoding="utf-8"
+        )
+        (src_main / "controller" / "EmployeeController.java").write_text(
+            self.SAMPLE_JAVA_CONTROLLER, encoding="utf-8"
+        )
+        (src_test / "EmployeeValidationTest.java").write_text(
+            self.SAMPLE_JAVA_TEST, encoding="utf-8"
+        )
 
-        # Secret file that should never be indexed
-        (self.repo_dir / ".env").write_text("SECRET_KEY=12345", encoding="utf-8")
+        # Secret file that must not be indexed.
+        (self.repo_dir / ".env").write_text(
+            "SECRET_KEY=12345", encoding="utf-8"
+        )
 
-        # Set TARGET_REPO_DIR to point to temporary test repo
-        self.original_target = os.environ.get("TARGET_REPO_DIR")
         os.environ["TARGET_REPO_DIR"] = str(self.repo_dir)
         os.environ["CODEGRAPH_ENABLED"] = "true"
 
-        # Initialize CodeGraphService for test repository
-        self.service = CodeGraphService.get_instance(target_repo=self.repo_dir, force_refresh=True)
+        # Initialize and index the temporary repository.
+        CodeGraphService._instance = None
+        self.service = CodeGraphService.get_instance(
+            target_repo=self.repo_dir,
+            force_refresh=True,
+        )
         self.service.ensure_indexed(force=True)
 
     def tearDown(self):
-        if self.service:
+        if getattr(self, "service", None):
             self.service.close()
+
         CodeGraphService._instance = None
-        if self.original_target:
+
+        if self.original_target is not None:
             os.environ["TARGET_REPO_DIR"] = self.original_target
         else:
             os.environ.pop("TARGET_REPO_DIR", None)
+
+        if self.original_enabled is not None:
+            os.environ["CODEGRAPH_ENABLED"] = self.original_enabled
+        else:
+            os.environ.pop("CODEGRAPH_ENABLED", None)
+
         self.temp_dir.cleanup()
 
     def test_search_symbols_success(self):
-        """Verify search_symbols locates classes and fields matching query."""
+        """Verify symbol search locates matching classes."""
         res = search_symbols("Employee")
+
         self.assertIn("symbols", res)
         self.assertGreater(res["total_matches"], 0)
-        names = [s["name"] for s in res["symbols"]]
+
+        names = [symbol["name"] for symbol in res["symbols"]]
         self.assertIn("Employee", names)
         self.assertIn("EmployeeController", names)
         self.assertIn("EmployeeService", names)
 
     def test_search_symbols_empty_query(self):
-        """Verify search_symbols rejects empty query."""
+        """Verify symbol search rejects an empty query."""
         res = search_symbols("")
+
         self.assertIn("error", res)
 
     def test_get_symbol_definition_success(self):
-        """Verify get_symbol_definition returns detailed symbol metadata and snippet."""
+        """Verify symbol definition includes metadata and source snippet."""
         res = get_symbol_definition("EmployeeController")
+
         self.assertEqual(res.get("name"), "EmployeeController")
         self.assertEqual(res.get("component_type"), "Controller")
         self.assertIn("RestController", res.get("annotations", []))
-        self.assertIn("EmployeeController", res.get("source_snippet", ""))
+        self.assertIn(
+            "EmployeeController",
+            res.get("source_snippet", ""),
+        )
 
     def test_get_symbol_definition_nonexistent(self):
-        """Verify get_symbol_definition returns error for unknown symbol."""
+        """Verify an unknown symbol returns an error."""
         res = get_symbol_definition("NonExistentClass")
+
         self.assertIn("error", res)
 
     def test_get_symbol_definition_empty_name(self):
-        """Verify get_symbol_definition rejects empty name."""
+        """Verify an empty symbol name is rejected."""
         res = get_symbol_definition("")
+
         self.assertIn("error", res)
 
     def test_find_callers_and_callees_success(self):
-        """Verify find_callers_and_callees discovers method invocations and injections."""
+        """Verify caller/callee discovery identifies service dependencies."""
         res = find_callers_and_callees("EmployeeController")
+
         self.assertEqual(res.get("symbol"), "EmployeeController")
+
         outbound = res.get("callees_outbound", [])
-        self.assertTrue(any("service" in c["target"].lower() for c in outbound))
+        self.assertTrue(
+            any("service" in item["target"].lower() for item in outbound)
+        )
 
     def test_find_callers_and_callees_empty_name(self):
-        """Verify find_callers_and_callees rejects empty name."""
+        """Verify an empty symbol name is rejected."""
         res = find_callers_and_callees("")
+
         self.assertIn("error", res)
 
     def test_get_dependency_context_success(self):
-        """Verify get_dependency_context provides complete context package and related tests."""
+        """Verify dependency context includes related source and tests."""
         res = get_dependency_context("Employee")
+
         self.assertEqual(res.get("name"), "Employee")
         self.assertIn("formatted_context", res)
-        self.assertIn("EmployeeValidationTest", "".join(res.get("related_tests", [])))
+        self.assertIn(
+            "EmployeeValidationTest",
+            "".join(res.get("related_tests", [])),
+        )
 
     def test_get_dependency_context_empty_name(self):
-        """Verify get_dependency_context rejects empty name."""
+        """Verify an empty symbol name is rejected."""
         res = get_dependency_context("")
+
         self.assertIn("error", res)
 
     def test_get_code_graph_summary_success(self):
-        """Verify get_code_graph_summary returns structured architectural layers."""
+        """Verify the summary contains the expected architectural layers."""
         res = get_code_graph_summary()
+
         self.assertIn("layers", res)
         layers = res["layers"]
-        self.assertIn("EmployeeController", layers.get("controllers", []))
-        self.assertIn("EmployeeService", layers.get("services", []))
-        self.assertIn("Employee", layers.get("entities", []))
-        self.assertIn("EmployeeValidationTest", layers.get("tests", []))
+
+        self.assertIn(
+            "EmployeeController",
+            layers.get("controllers", []),
+        )
+        self.assertIn(
+            "EmployeeService",
+            layers.get("services", []),
+        )
+        self.assertIn(
+            "Employee",
+            layers.get("entities", []),
+        )
+        self.assertIn(
+            "EmployeeValidationTest",
+            layers.get("tests", []),
+        )
 
     def test_codegraph_disabled_fallback(self):
-        """Verify tools return graceful disabled status when CODEGRAPH_ENABLED=false."""
+        """Verify tools gracefully handle CodeGraph being disabled."""
         with patch.dict(os.environ, {"CODEGRAPH_ENABLED": "false"}):
             res = search_symbols("Employee")
-            self.assertEqual(res.get("status"), "disabled")
-            self.assertIn("fallback", res)
+
+        self.assertEqual(res.get("status"), "disabled")
+        self.assertIn("fallback", res)
 
     def test_codegraph_unavailable_parser_fallback(self):
-        """Verify tools return graceful unavailable status when tree-sitter parser is missing."""
-        with patch.object(CodeGraphService, "is_parser_available", return_value=False):
-            # Refresh instance with parser unavailable
-            svc = CodeGraphService(target_repo=self.repo_dir, use_memory_db=True)
-            res = svc.search_symbols("Employee")
-            self.assertEqual(res.get("status"), "unavailable")
-            self.assertIn("fallback", res)
+        """Verify graceful fallback when Tree-sitter is unavailable."""
+        with patch.object(
+            CodeGraphService,
+            "is_parser_available",
+            return_value=False,
+        ):
+            service = CodeGraphService(
+                target_repo=self.repo_dir,
+                use_memory_db=True,
+            )
+            res = service.search_symbols("Employee")
+
+        self.assertEqual(res.get("status"), "unavailable")
+        self.assertIn("fallback", res)
 
     def test_path_isolation_excludes_secrets_and_git(self):
-        """Verify secret files (.env) and excluded directories are strictly omitted from index."""
+        """Verify secret files and Git directories are excluded from indexing."""
         indexer = self.service.indexer
         java_files = indexer._find_java_files()
-        for f in java_files:
-            self.assertTrue(f.endswith(".java"))
-            self.assertFalse(".env" in f)
-            self.assertFalse(".git" in f)
+
+        for file_path in java_files:
+            self.assertTrue(file_path.endswith(".java"))
+            self.assertNotIn(".env", file_path)
+            self.assertNotIn(".git", file_path)
 
     def test_incremental_indexing_skips_unchanged_files(self):
-        """Verify re-indexing unchanged files returns 0 indexed files."""
+        """Verify unchanged files are skipped during incremental indexing."""
         count = self.service.indexer.index_repository(force=False)
+
         self.assertEqual(count, 0)
 
 
