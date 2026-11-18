@@ -62,13 +62,12 @@ MANDATORY WORKFLOW:
    a) INGEST LIVING DOCUMENTATION: Call read_project_file for ARCHITECTURE.md, DOMAIN_SPEC.md, and openapi.yml (if present).
 
    b) MANDATORY CODEGRAPH EXPLORATION:
-      - Call get_architecture_graph to understand the existing REST endpoints, controllers, services, repositories, and JPA entities.
-      - Use query_code_graph (query_type='routes' or 'dependencies') to inspect component relationships.
-      - For relevant Java code, use search_symbols with keywords from the Jira ticket to find entities, controllers, services, and repositories.
-      - Call get_symbol_definition to inspect signatures, annotations, and code snippets.
-      - Call find_callers_and_callees and get_dependency_context to understand how existing components interact before making changes.
-      - Use get_code_graph_summary when an overall code graph summary is needed.
-      - Only use read_project_file for non-code files (such as YAML, SQL migrations, and build files), or when full source-file context is strictly necessary.
+      - Call get_code_graph_summary to understand the indexed repository structure and available components.
+      - Use search_symbols with keywords from the Jira ticket to find relevant entities, controllers, services, and repositories.
+      - Call get_symbol_definition to inspect relevant signatures, annotations, and source snippets.
+      - Call find_callers_and_callees to understand relationships between relevant components.
+      - Call get_dependency_context to inspect dependencies and related tests before making changes.
+      - Use read_project_file for non-code files or when complete source-file context is strictly necessary.
 
    c) CRITICAL CONTEXT MANDATE:
       - ARCHITECTURE.md: Ingest architectural patterns, layering rules, HTTP status conventions, and exception handling standards.
@@ -119,24 +118,22 @@ SAFETY & OPERATIONAL RULES:
 - Always use the tools to perform edits, tests, commits, and PR creation.
 """,
     tools=[
-        get_jira_issue,
-        get_configured_jira_issue,
-        prepare_feature_branch,
-        initialize_workspace,
-        get_architecture_graph,
-        query_code_graph,
-        list_project_files,
-        read_project_file,
-        write_project_file,
-        run_project_tests,
-        get_git_status,
-        get_git_diff,
-        commit_changes,
-        push_and_create_pull_request,
-        search_symbols,
-        get_symbol_definition,
-        find_callers_and_callees,
-        get_dependency_context,
-        get_code_graph_summary,
-    ],
+            get_jira_issue,
+            get_configured_jira_issue,
+            prepare_feature_branch,
+            initialize_workspace,
+            list_project_files,
+            read_project_file,
+            write_project_file,
+            run_project_tests,
+            get_git_status,
+            get_git_diff,
+            commit_changes,
+            push_and_create_pull_request,
+            search_symbols,
+            get_symbol_definition,
+            find_callers_and_callees,
+            get_dependency_context,
+            get_code_graph_summary,
+        ],
 )

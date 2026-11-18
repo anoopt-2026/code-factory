@@ -1,3 +1,4 @@
+
 from .jira_tools import get_jira_issue, get_configured_jira_issue
 from .repository_tools import (
     prepare_feature_branch,
@@ -32,8 +33,6 @@ __all__ = [
     "get_git_diff",
     "commit_changes",
     "push_and_create_pull_request",
-    "get_architecture_graph",
-    "query_code_graph",
     "search_symbols",
     "get_symbol_definition",
     "find_callers_and_callees",
