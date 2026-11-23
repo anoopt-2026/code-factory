@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import shutil
 import subprocess
@@ -264,7 +265,7 @@ def write_project_file(file_path: str, content: str, issue_key: Optional[str] = 
 
 
 def run_project_tests(issue_key: Optional[str] = None) -> dict:
-    """Run the repository test suite (Maven, Gradle) to verify implementation changes."""
+    """Run the repository test suite (Maven, Gradle, Python unittest) to verify implementation changes."""
     # Check for mock test mode
     mock_mode = (
         os.getenv("MOCK_TESTS", "").lower() in ("true", "1", "yes")
@@ -328,6 +329,15 @@ def run_project_tests(issue_key: Optional[str] = None) -> dict:
                     "error": "build.gradle found but Gradle (gradle/gradlew) was not found in PATH or project.",
                     "output_tail": "Gradle executable not found.",
                 }
+        elif (repo / "tests").is_dir() or (repo / "pytest.ini").exists() or (repo / "setup.py").exists() or (repo / "pyproject.toml").exists():
+            if mock_mode:
+                return {
+                    "tests_passed": True,
+                    "exit_code": 0,
+                    "output_tail": "[MOCK] Python test runner simulated. All tests passed.",
+                    "note": "Running in mock test mode."
+                }
+            command = [sys.executable, "-m", "unittest", "discover", "-s", "tests"]
         else:
             return {"note": "No recognizable test runner configuration found (e.g. pom.xml or build.gradle). Skipping tests."}
 
@@ -361,8 +371,8 @@ def get_git_status(issue_key: Optional[str] = None) -> dict:
         branch = _git(repo, "branch", "--show-current")
         status = _git(repo, "status", "--short")
         if branch.returncode or status.returncode:
-            return {"error": (branch.stderr + status.stderr)[-2000:]}
-        return {"branch": branch.stdout.strip(), "status": status.stdout.strip() or "clean"}
+            return {"error": ((branch.stderr or "") + (status.stderr or ""))[-2000:]}
+        return {"branch": (branch.stdout or "").strip(), "status": (status.stdout or "").strip() or "clean"}
     except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
         return {"error": str(exc)}
 
@@ -377,11 +387,11 @@ def get_git_diff(issue_key: Optional[str] = None) -> dict:
         staged = _git(repo, "diff", "--cached", "--")
         status = _git(repo, "status", "--short")
         if diff.returncode or staged.returncode or status.returncode:
-            return {"error": (diff.stderr + staged.stderr + status.stderr)[-2000:]}
+            return {"error": ((diff.stderr or "") + (staged.stderr or "") + (status.stderr or ""))[-2000:]}
         return {
-            "unstaged_diff": diff.stdout[-20000:],
-            "staged_diff": staged.stdout[-20000:],
-            "status": status.stdout.strip() or "clean",
+            "unstaged_diff": (diff.stdout or "")[-20000:],
+            "staged_diff": (staged.stdout or "")[-20000:],
+            "status": (status.stdout or "").strip() or "clean",
         }
     except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
         return {"error": str(exc)}

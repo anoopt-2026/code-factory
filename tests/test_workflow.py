@@ -21,6 +21,7 @@ from coding_agent.tools.repository_tools import (
     write_project_file,
     run_project_tests,
     get_git_status,
+    get_git_diff,
     commit_changes,
 )
 from coding_agent.tools.github_tools import push_and_create_pull_request
@@ -90,7 +91,10 @@ class TestAgentEndToEndWorkflow(unittest.TestCase):
         tests_res = run_project_tests(ticket)
         self.assertTrue(tests_res.get("tests_passed"))
 
-        # 6. Check Git Status
+        # 6. Check Git Diff & Status (Ponytail Diff Audit)
+        diff_res = get_git_diff()
+        self.assertIn("validate", diff_res.get("unstaged_diff", ""))
+
         status_res = get_git_status()
         self.assertEqual(status_res.get("branch"), ticket)
         self.assertIn("App.java", status_res.get("status"))
@@ -106,7 +110,7 @@ class TestAgentEndToEndWorkflow(unittest.TestCase):
             summary=jira_issue.get("summary"),
             description=jira_issue.get("description"),
             acceptance_criteria=jira_issue.get("acceptance_criteria"),
-            changes_summary="Added validation method and updated App.java",
+            changes_summary="Added validation method and updated App.java following Ponytail principles.",
             test_summary="Diagnostic tests executed successfully.",
         )
         self.assertTrue(pr_res.get("success"))

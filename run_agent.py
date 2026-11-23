@@ -11,6 +11,9 @@ Usage:
 
     # Dry-run mode (live Jira, but simulate git push & PR):
     python run_agent.py --ticket DEMO-1 --dry-run
+
+    # Ponytail Mode (enabled by default; use --no-ponytail to disable):
+    python run_agent.py --ticket DEMO-1 --ponytail
 """
 
 import os
@@ -203,6 +206,19 @@ def parse_args():
         default=os.getenv("DRY_RUN", "").lower() in ("true", "1", "yes"),
         help="Do not push changes to GitHub or create live PR",
     )
+    parser.add_argument(
+        "--ponytail",
+        dest="ponytail",
+        action="store_true",
+        default=os.getenv("PONYTAIL_MODE", "true").lower() in ("true", "1", "yes"),
+        help="Enable Ponytail mode for minimal, reusable, and maintainable code generation (default: true)",
+    )
+    parser.add_argument(
+        "--no-ponytail",
+        dest="ponytail",
+        action="store_false",
+        help="Disable Ponytail mode",
+    )
     return parser.parse_args()
 
 
@@ -222,6 +238,8 @@ def setup_environment(args):
         os.environ["DRY_RUN"] = "true"
     if args.dry_run:
         os.environ["DRY_RUN"] = "true"
+    if hasattr(args, "ponytail"):
+        os.environ["PONYTAIL_MODE"] = "true" if args.ponytail else "false"
 
     # Check for GitHub Action INPUT_* variables and normalize them
     for key, val in list(os.environ.items()):
@@ -382,7 +400,7 @@ def _log_tool_step(step: int, tool_name: str, tool_args: dict, result: Any, tick
     elif tool_name in ("get_git_status", "get_git_diff"):
         status = result.get("status", "clean")
         branch = result.get("branch", ticket)
-        print(f"🔍 [Step {step}] Git Status & Working Tree Review:")
+        print(f"🔍 [Step {step}] Git Status & Working Tree Review (Ponytail Diff Audit):")
         print(f"   • Branch:     {branch}")
         print(f"   • Status:     {status}")
 
@@ -418,7 +436,7 @@ async def run_simulation_mode(ticket: str, session: WorkspaceSession) -> int:
     from coding_agent.tools.github_tools import push_and_create_pull_request
     from coding_agent.tools.codegraph_tools import get_architecture_graph
 
-    print("\n[Simulation Mode] Executing end-to-end tool pipeline...")
+    print("\n[Simulation Mode] Executing end-to-end tool pipeline with Ponytail principles...")
 
     # Step 1: Jira Issue Fetch
     jira_res = get_jira_issue(ticket)
@@ -444,9 +462,18 @@ async def run_simulation_mode(ticket: str, session: WorkspaceSession) -> int:
     test_res = run_project_tests(ticket)
     _log_tool_step(5, "run_project_tests", {"issue_key": ticket}, test_res, ticket)
 
-    # Step 6: Git Status & Diff
+    # Step 6: Git Status & Diff Review (Ponytail Mode)
+    diff_res = get_git_diff()
+    _log_tool_step(6, "get_git_diff", {}, diff_res, ticket)
     status_res = get_git_status()
     _log_tool_step(6, "get_git_status", {}, status_res, ticket)
+
+    ponytail_active = os.getenv("PONYTAIL_MODE", "true").lower() in ("true", "1", "yes")
+    changes_desc = (
+        "Agent verified workspace, read Code Graph architecture, validated requirements, and applied Ponytail principles (minimal surgical changes, reused existing components, no extraneous abstractions)."
+        if ponytail_active
+        else "Agent verified workspace, read Code Graph architecture, and validated requirements."
+    )
 
     # Step 7: PR creation simulation
     pr_res = push_and_create_pull_request(
@@ -454,7 +481,7 @@ async def run_simulation_mode(ticket: str, session: WorkspaceSession) -> int:
         summary=jira_res.get("summary", ""),
         description=jira_res.get("description", ""),
         acceptance_criteria=jira_res.get("acceptance_criteria", ""),
-        changes_summary="Agent verified workspace, read Code Graph architecture, and validated requirements.",
+        changes_summary=changes_desc,
         test_summary=test_res.get("output_tail", "All tests verified."),
     )
     _log_tool_step(7, "push_and_create_pull_request", {}, pr_res, ticket)
@@ -471,10 +498,13 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
     global _active_session
     from coding_agent.tools.jira_tools import get_jira_issue
 
+    ponytail_active = os.getenv("PONYTAIL_MODE", "true").lower() in ("true", "1", "yes")
+
     print("=" * 65)
     print(f"🚀 Starting CodeFactoryAgent for ticket: {ticket}")
     print(f"📁 Target repository: {os.getenv('TARGET_REPO_DIR', 'Default')}")
     print(f"🤖 Model: {os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')}")
+    print(f"🌿 Ponytail Mode: {'Enabled' if ponytail_active else 'Disabled'}")
     print(f"🧪 Mock/Offline Mode: {'Enabled' if is_mock else 'Disabled'}")
     print("=" * 65)
 
@@ -568,9 +598,22 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
             ]
             tool_map = {fn.__name__: fn for fn in tools}
 
+            ponytail_section = ""
+            if ponytail_active:
+                ponytail_section = (
+                    "Ponytail Mode Directives (MANDATORY):\n"
+                    "- Prioritize understanding and reusing existing code before introducing new implementations.\n"
+                    "- Modify ONLY files strictly necessary to satisfy the Jira requirements.\n"
+                    "- Avoid unnecessary abstractions, duplicate logic, unrelated refactoring, and additional dependencies.\n"
+                    "- Follow YAGNI: implement only explicitly required functionality.\n"
+                    "- Follow existing project architecture, naming conventions, and coding standards.\n"
+                    "- Review the generated Git diff (get_git_diff and get_git_status) before committing to ensure no extraneous changes exist.\n\n"
+                )
+
             prompt = (
                 f"Please implement the requirements and acceptance criteria for Jira ticket '{ticket}'.\n"
                 f"Ticket summary: {jira_data.get('summary')}\n\n"
+                f"{ponytail_section}"
                 f"Workflow instructions:\n"
                 f"1. Call prepare_feature_branch with issue_key='{ticket}' to create/switch to the feature branch.\n"
                 f"2. Call get_architecture_graph to immediately inspect all Spring controllers, endpoints, services, and repositories.\n"

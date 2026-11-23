@@ -1,8 +1,8 @@
 # CodeFactoryAgent: Autonomous Jira-Driven Software Engineering Agent
 
-`CodeFactoryAgent` is an autonomous AI software engineering bot designed to bridge the gap between a **Jira ticket** and a **GitHub Pull Request**. 
+`CodeFactoryAgent` is an autonomous AI software engineering bot designed to bridge the gap between a **Jira ticket** and a **GitHub Pull Request** with **Ponytail Mode** for minimal, reusable, and maintainable code generation.
 
-It functions like an automated software engineer on your team: given a ticket key (e.g., `DEMO-1` or `KAN-4`), it reads the story requirements, analyzes the target application's **Code Graph** and architectural context, creates an isolated feature branch, writes idiomatic code, updates living documentation, verifies changes with tests, and opens a Pull Request for human review.
+It functions like an automated software engineer on your team: given a ticket key (e.g., `DEMO-1` or `KAN-4`), it reads the story requirements, analyzes the target application's **Code Graph** and architectural context, creates an isolated feature branch, writes idiomatic and minimal code following Ponytail principles, updates living documentation, verifies changes with tests, and opens a Pull Request for human review.
 
 ---
 
@@ -14,16 +14,17 @@ It functions like an automated software engineer on your team: given a ticket ke
                              & creates 'KAN-4' branch      & reads ARCHITECTURE.md
         │                                  │                               │
         ▼                                  ▼                               ▼
-[ 4. Code Implementation ]    [ 5. Test Verification ]      [ 6. GitHub Pull Request ]
- Agent writes Java classes,   Agent runs 'mvn test'         Branch is pushed to GitHub;
- DTOs & updates openapi.yml   to verify no regressions      PR is opened for human review
+[ 4. Ponytail Implementation ] [ 5. Test Verification ]     [ 6. GitHub Pull Request ]
+ Minimal surgical changes,     Agent runs tests to           Branch is pushed to GitHub;
+ reuse existing classes &      verify no regressions &       PR is opened for human review
+ audit diff before commit      checks git status / diff
 ```
 
 ### The Key Pieces:
 1. **The Dispatcher (`run_agent.py` & `action.yml`):**
    The "Front Desk". It validates pre-flight Jira credentials, loads environment settings, and boots the agent.
 2. **The Brain (`coding_agent/agent.py`):**
-   Powered by Google Gemini (`gemini-2.5-flash`), it reasons autonomously across a multi-turn tool-calling loop.
+   Powered by Google Gemini (`gemini-2.5-flash`), it reasons autonomously across a multi-turn tool-calling loop guided by **Ponytail Mode Principles**.
 3. **The Code Graph Engine (`coding_agent/tools/codegraph_tools.py`):**
    The "IDE Map". Parses Spring Boot ASTs into an in-memory directed graph (`networkx`), mapping endpoints, beans, repositories, entities, and dependency injection edges.
 4. **The Toolbelt (`coding_agent/tools/`):**
@@ -33,30 +34,49 @@ It functions like an automated software engineer on your team: given a ticket ke
 
 ---
 
+## 🌿 Ponytail Mode: Minimal & Maintainable Code Generation
+
+Ponytail Mode ensures all agent actions adhere to five core engineering principles:
+
+1. **Reuse Existing Implementations:** Always inspect existing classes, methods, repositories, and utilities before creating new ones. Avoid duplicate implementations.
+2. **Minimal Code Changes:** Modify only the files strictly required to satisfy the Jira acceptance criteria. Avoid unrelated refactoring, cosmetic restyling, or unnecessary abstractions.
+3. **YAGNI (You Aren't Gonna Need It):** Implement only explicitly required functionality. Reject speculative features, premature generalizations, and unnecessary external dependencies.
+4. **Architecture Compliance:** Follow existing project architecture, naming conventions, and coding patterns from living documentation.
+5. **Implementation & Diff Review:** Audit the generated Git diff (`get_git_diff` and `get_git_status`) before committing to eliminate accidental or extraneous changes.
+
+Ponytail Mode is enabled by default (`PONYTAIL_MODE=true`). It can be toggled via CLI:
+```powershell
+python run_agent.py --ticket DEMO-1 --ponytail       # Enabled (default)
+python run_agent.py --ticket DEMO-1 --no-ponytail    # Disabled
+```
+
+---
+
 ## 🏗️ Architecture & Component Breakdown
 
 ```text
 code-factory/
 ├── action.yml                  <-- GitHub Composite Action for CI/CD embedding
-├── run_agent.py                <-- Entry point CLI supporting Live AI & Mock Simulation
+├── run_agent.py                <-- Entry point CLI supporting Live AI, Ponytail Mode & Mock Simulation
 ├── requirements.txt            <-- Dependencies (google-genai, networkx, requests, pytest)
 ├── .env.example                <-- Configuration template (live API keys & mock flags)
 ├── coding_agent/               <-- Core agent orchestration & tools
-│   ├── __init__.py
-│   ├── agent.py                <-- Agent declaration, system prompt & workflow rules
+│   ├── __init__.py             <-- Package exports (root_agent, PONYTAIL_PRINCIPLES)
+│   ├── agent.py                <-- Agent declaration, Ponytail system prompt & workflow rules
 │   └── tools/                  <-- Sandboxed agent tools
 │       ├── __init__.py
 │       ├── jira_tools.py       <-- Jira REST v3/v2 client, ADF parser & mock mode
 │       ├── codegraph_tools.py  <-- In-memory Spring Boot Code Graph & query tools
 │       ├── repository_tools.py <-- Git branching, recursive filesystem & test runner
 │       └── github_tools.py     <-- Remote git push, dry-run & Pull Request creator
-└── tests/                      <-- Automated test suite (20 unit/integration tests)
+└── tests/                      <-- Automated test suite (25+ unit/integration tests)
     ├── __init__.py
     ├── test_jira_tools.py
     ├── test_codegraph_tools.py
     ├── test_repository_tools.py
     ├── test_github_tools.py
-    └── test_workflow.py
+    ├── test_workflow.py
+    └── test_ponytail_mode.py
 ```
 
 ---
@@ -86,8 +106,8 @@ The agent includes a native **Code Graph Engine** (`codegraph_tools.py`) that pa
 | `list_project_files` | Filesystem | Recursively explores directory structure with depth controls (`max_depth=15`). |
 | `read_project_file` | Filesystem | Reads UTF-8 source files with path-traversal prevention. |
 | `write_project_file` | Filesystem | Creates or updates code and living documentation files safely. |
-| `run_project_tests` | Verification | Executes `mvn test` / `gradle test` (or mock runner if build tools are absent). |
-| `get_git_status` / `get_git_diff` | Git | Reviews staged/unstaged changes before committing. |
+| `run_project_tests` | Verification | Executes `mvn test`, `gradle test`, or Python `unittest` (or mock runner if build tools are absent). |
+| `get_git_status` / `get_git_diff` | Git | Reviews staged/unstaged changes before committing (Ponytail diff audit). |
 | `commit_changes` | Git | Stages files and creates a conventional commit referencing the ticket. |
 | `push_and_create_pull_request` | GitHub | Pushes branch to `origin` and opens a formatted Pull Request for human review. |
 
@@ -109,7 +129,7 @@ python run_agent.py --ticket KAN-4 --repo-dir ../sample-springboot-app
 
 ## 💻 Local Testing & Verification
 
-Run the automated test suite (all **20 tests**):
+Run the automated test suite (all **25+ tests**):
 ```powershell
 python -m unittest discover -s tests -v
 ```
@@ -117,7 +137,8 @@ python -m unittest discover -s tests -v
 - `test_codegraph_tools.py`: AST parsing, route discovery, dependency graph, impact analysis.
 - `test_repository_tools.py`: File safety, path traversal protection, recursive search.
 - `test_github_tools.py`: Slug parsing, Markdown PR generation, dry-run mode.
-- `test_workflow.py`: End-to-end 7-step autonomous tool pipeline test.
+- `test_workflow.py`: End-to-end 8-step autonomous tool pipeline test with diff audit.
+- `test_ponytail_mode.py`: Ponytail Mode principles, CLI arguments, and PR tool invariants.
 
 ---
 
@@ -169,3 +190,4 @@ jobs:
 - **Prompt Injection Defense:** Jira text is treated as passive requirements (untrusted data).
 - **Credential Protection:** `.env`, `.env.*`, keys (`*.key`, `*.pem`, `id_rsa`), and certificates are strictly shielded from read/write tools and git staging.
 - **Human in the Loop:** The agent works exclusively on feature branches and submits Pull Requests. Direct pushes to `main` are strictly blocked.
+- **Ponytail Invariant:** Code changes are verified and audited against the diff before staging and committing.
