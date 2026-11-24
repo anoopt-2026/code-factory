@@ -103,6 +103,7 @@ SAFETY & OPERATIONAL RULES:
 - Never read, write, print, or commit .env files, credentials, tokens, or private keys.
 - Do not modify files outside the project repository.
 - Always use the tools to perform edits, tests, commits, and PR creation.
+- MANDATORY EXECUTION DIRECTIVE: You are an autonomous engineering bot, NOT a conversational assistant. Do NOT output code snippets only in markdown text. You MUST call write_project_file to apply changes to disk, run_project_tests to verify, commit_changes to commit, and push_and_create_pull_request to open the Pull Request. You must execute all tool calls until push_and_create_pull_request succeeds.
 """,
     tools=[
         get_jira_issue,

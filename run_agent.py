@@ -573,6 +573,25 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
                 push_and_create_pull_request,
             )
 
+            # Pre-flight: Guarantee the feature branch is created and checked out right at the start
+            print(f"🌿 [Pre-flight] Preparing dedicated feature branch for '{ticket}'...", flush=True)
+            branch_res = prepare_feature_branch(ticket)
+            _log_tool_step(0, "prepare_feature_branch", {"issue_key": ticket}, branch_res, ticket)
+            if "error" in branch_res:
+                print_fatal_error(
+                    stage=f"Git Branching Failure for '{ticket}'",
+                    error_message=branch_res["error"],
+                    troubleshooting=[
+                        "Check if target repository is a valid Git repo",
+                        "Ensure no merge conflicts or uncommitted blocking changes exist",
+                    ],
+                    ticket=ticket,
+                )
+                return EXIT_CONFIG_ERROR
+
+            last_branch = branch_res.get("branch", ticket)
+            session.feature_branch = last_branch
+
             api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
             model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
             client = genai.Client(api_key=api_key)
@@ -594,19 +613,19 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
             tool_map = {fn.__name__: fn for fn in tools}
 
             prompt = (
-                f"Please implement the requirements and acceptance criteria for Jira ticket '{ticket}'.\n"
-                f"Ticket summary: {jira_data.get('summary')}\n\n"
-                f"Workflow instructions:\n"
-                f"1. Call prepare_feature_branch with issue_key='{ticket}' to create/switch to the feature branch.\n"
-                f"2. Call get_architecture_graph to immediately inspect all Spring controllers, endpoints, services, and repositories.\n"
-                f"3. Call read_project_file to read ARCHITECTURE.md, DOMAIN_SPEC.md, and openapi.yml.\n"
-                f"4. Read existing Java code in src/main/java and tests in src/test/java.\n"
-                f"5. Implement all required changes using write_project_file (Java code, tests, and updating openapi.yml).\n"
-                f"6. Call run_project_tests to verify the implementation.\n"
-                f"7. Call get_git_diff and get_git_status to review changes.\n"
-                f"8. Call commit_changes with a message like 'feat({ticket}): ...'.\n"
-                f"9. Call push_and_create_pull_request to submit the Pull Request for human review.\n"
-                f"10. Output your final summary."
+                f"You are implementing Jira ticket '{ticket}'.\n"
+                f"Summary: {jira_data.get('summary')}\n"
+                f"Feature branch '{last_branch}' has been prepared and is currently checked out.\n\n"
+                f"MANDATORY AUTONOMOUS EXECUTION INSTRUCTIONS:\n"
+                f"1. Call get_architecture_graph to inspect existing Spring Boot controllers, endpoints, and services.\n"
+                f"2. Call read_project_file to read ARCHITECTURE.md, DOMAIN_SPEC.md, and openapi.yml.\n"
+                f"3. Read existing Java code in src/main/java and tests in src/test/java.\n"
+                f"4. Implement all code and tests using write_project_file. Update openapi.yml and DOMAIN_SPEC.md.\n"
+                f"5. Call run_project_tests to verify the implementation passes.\n"
+                f"6. Call get_git_diff and get_git_status to review changes.\n"
+                f"7. Call commit_changes with a message like 'feat({ticket}): ...'.\n"
+                f"8. Call push_and_create_pull_request to open the Pull Request.\n"
+                f"CRITICAL: You are an autonomous software engineering engine. You MUST execute all changes through tool calls. Do NOT produce only conversational text. Proceed immediately by calling the first inspection tool."
             )
 
             print(f"🤖 Invoking Gemini ({model}) with autonomous multi-step reasoning...", flush=True)
@@ -615,6 +634,7 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
                 config=types.GenerateContentConfig(
                     system_instruction=root_agent.instruction,
                     tools=tools,
+                    temperature=0.2,
                 ),
             )
 
@@ -623,18 +643,61 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
 
             step = 1
             max_steps = 30
-            last_branch = ticket
             last_commit = None
             pr_error = None
             pr_url = None
+            is_dry_run = os.getenv("DRY_RUN", "").lower() in ("true", "1", "yes")
 
             while step <= max_steps:
+                # Check for recitation or content safety filter blocks
+                cand = response.candidates[0] if (response and response.candidates) else None
+                finish_reason = getattr(cand, "finish_reason", None)
+                if finish_reason and "RECITATION" in str(finish_reason):
+                    print(f"\n⚠️  [Turn {step}] Model output was flagged for recitation/repetition. Nudging to write custom domain code...", flush=True)
+                    nudge = (
+                        "Your previous response was flagged for recitation. "
+                        "Please write original, domain-specific code tailored uniquely to this Employee Service entity and domain specification. "
+                        "Call write_project_file directly with the custom implementation."
+                    )
+                    step += 1
+                    response = chat.send_message(nudge)
+                    continue
+
                 if response.text and response.text.strip():
                     print(f"\n🧠 [Agent Thought]:\n{response.text.strip()}\n", flush=True)
 
                 if not response.function_calls:
-                    print("🏁 Agent indicated all tasks are completed (no further tool calls).", flush=True)
-                    break
+                    # Verify if workflow genuinely completed
+                    if pr_url or (is_dry_run and last_commit):
+                        print("🏁 Agent indicated all tasks are completed (Pull Request created).", flush=True)
+                        break
+
+                    # If model returned text without executing required tools, nudge it to continue
+                    text_preview = (response.text or "").strip()
+                    print(f"\n⚠️  [Turn {step}] Model provided text without calling the next required tool (PR is not yet created).", flush=True)
+                    if text_preview:
+                        print(f"   Model response preview: {text_preview[:250]}...", flush=True)
+
+                    if not last_commit:
+                        reminder = (
+                            "CRITICAL: You have not completed the implementation yet. "
+                            "Do NOT output text only. You MUST execute tool calls: "
+                            "1. Call write_project_file to save the Java classes and test files to disk.\n"
+                            "2. Call run_project_tests to verify tests pass.\n"
+                            "3. Call commit_changes to commit the changes.\n"
+                            "4. Call push_and_create_pull_request to open the Pull Request.\n"
+                            "Proceed now by calling write_project_file."
+                        )
+                    else:
+                        reminder = (
+                            "You have committed changes locally, but you have NOT opened the Pull Request yet. "
+                            "Call push_and_create_pull_request now to submit the Pull Request."
+                        )
+
+                    print(f"👉 Directing agent to execute tool action (Step {step}/{max_steps})...", flush=True)
+                    step += 1
+                    response = chat.send_message(reminder)
+                    continue
 
                 print(f"\n⚡ [Turn {step}] Agent selected {len(response.function_calls)} action(s)...", flush=True)
                 tool_responses = []
@@ -690,18 +753,29 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
                 print(f"⏳ [Turn {step - 1}] Sending tool outputs back to Gemini ({model})...", flush=True)
                 response = chat.send_message(tool_responses)
 
-            if last_commit:
-                # Local commit succeeded; mark session complete so cleanup does not discard work
+            if last_commit and (pr_url or is_dry_run):
+                # Work completed and committed; mark session complete so cleanup does not discard work
                 session.mark_success()
 
             print("\n" + "=" * 65, flush=True)
-            if pr_error:
-                print("⚠️  CodeFactoryAgent Finished with Warnings / Incomplete PR:", flush=True)
-            else:
+            if pr_url or (is_dry_run and last_commit):
                 print("🎉 CodeFactoryAgent Autonomous Execution Finished Successfully!", flush=True)
+                if pr_url:
+                    print(f"🔗 Pull Request URL: {pr_url}", flush=True)
+            elif pr_error:
+                print("⚠️  CodeFactoryAgent Finished with Warnings / Incomplete PR:", flush=True)
+            elif not last_commit:
+                print("🚨 CodeFactoryAgent Incomplete Execution: No code committed.", flush=True)
             print("=" * 65, flush=True)
             if response.text:
                 print(response.text, flush=True)
+
+            if not last_commit:
+                print("\n" + "!" * 65, flush=True)
+                print("🚨 INCOMPLETE WORKFLOW: The agent did not commit any code changes.", flush=True)
+                print(f"• Ticket: {ticket}", flush=True)
+                print("!" * 65 + "\n", flush=True)
+                return EXIT_EXTERNAL_SERVICE_ERROR
 
             if pr_error:
                 print("\n" + "!" * 65, flush=True)
