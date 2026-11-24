@@ -43,6 +43,10 @@ class TestRepositoryTools(unittest.TestCase):
         with self.assertRaises(ValueError):
             _safe_file(self.repo_path, ".env.production")
 
+    def test_safe_file_protects_agent_dir(self):
+        with self.assertRaises(ValueError):
+            _safe_file(self.repo_path, ".code-factory-agent/run_agent.py")
+
     def test_safe_file_protects_keys(self):
         with self.assertRaises(ValueError):
             _safe_file(self.repo_path, "server.key", for_write=True)
