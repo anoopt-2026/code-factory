@@ -83,6 +83,7 @@ jobs:
 
       - name: Execute CodeFactoryAgent
         env:
+          PYTHONUNBUFFERED: '1'
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GEMINI_MODEL: ${{ inputs.gemini_model }}
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
@@ -95,6 +96,16 @@ jobs:
           MOCK_MODE: ${{ inputs.mock_mode }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
+          echo "::group::🚀 Pre-flight Runner & Environment Inspection"
+          echo "Target Workspace: ${{ github.workspace }}"
+          echo "Jira Ticket:      ${{ inputs.jira_ticket_number }}"
+          echo "Gemini Model:     ${{ inputs.gemini_model }}"
+          echo "Mock Mode:        ${{ inputs.mock_mode }}"
+          echo "Dry Run:          ${{ inputs.dry_run }}"
+          echo "Java Runtime:     $(java -version 2>&1 | head -n 1)"
+          echo "Python Runtime:   $(python -V 2>&1)"
+          echo "::endgroup::"
+
           EXTRA_FLAGS=""
           if [ "${{ inputs.mock_mode }}" = "true" ]; then
             EXTRA_FLAGS="$EXTRA_FLAGS --mock"
@@ -102,4 +113,4 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             EXTRA_FLAGS="$EXTRA_FLAGS --dry-run"
           fi
-          python .code-factory-agent/run_agent.py --ticket "${{ inputs.jira_ticket_number }}" --repo-dir "${{ github.workspace }}" --model "${{ inputs.gemini_model }}" $EXTRA_FLAGS
+          python -u .code-factory-agent/run_agent.py --ticket "${{ inputs.jira_ticket_number }}" --repo-dir "${{ github.workspace }}" --model "${{ inputs.gemini_model }}" $EXTRA_FLAGS

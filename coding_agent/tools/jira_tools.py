@@ -236,6 +236,8 @@ def get_jira_issue(issue_key: Optional[str] = None) -> dict:
 
     # If mock/offline mode is active, return mock issue data
     if _is_mock_mode():
+        if not (_get_setting("JIRA_BASE_URL") and _get_setting("JIRA_API_TOKEN")):
+            print(f"ℹ️  [Notice] Jira credentials not configured; using mock issue specification for '{key}'.", flush=True)
         return _get_mock_issue(key)
 
     raw_base_url = _get_setting("JIRA_BASE_URL").strip()
