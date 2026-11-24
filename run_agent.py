@@ -29,6 +29,15 @@ EXIT_EXTERNAL_SERVICE_ERROR = 2
 EXIT_VERIFICATION_ERROR = 3
 EXIT_INTERRUPTED = 130
 
+# Ensure immediate unbuffered output in CI/CD runners
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 # Ensure the agent root is in sys.path
 AGENT_ROOT = Path(__file__).resolve().parent
 if str(AGENT_ROOT) not in sys.path:
@@ -471,16 +480,32 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
     global _active_session
     from coding_agent.tools.jira_tools import get_jira_issue
 
-    print("=" * 65)
-    print(f"🚀 Starting CodeFactoryAgent for ticket: {ticket}")
-    print(f"📁 Target repository: {os.getenv('TARGET_REPO_DIR', 'Default')}")
-    print(f"🤖 Model: {os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')}")
-    print(f"🧪 Mock/Offline Mode: {'Enabled' if is_mock else 'Disabled'}")
-    print("=" * 65)
-
     # Pre-flight Check: Validate target repository directory exists
     repo_dir_setting = os.getenv("TARGET_REPO_DIR", "../sample-springboot-app")
     target_repo_path = Path(repo_dir_setting).resolve()
+
+    print("=" * 65, flush=True)
+    print(f"🚀 Starting CodeFactoryAgent for ticket: {ticket}", flush=True)
+    print(f"📁 Target repository: {target_repo_path}", flush=True)
+    print(f"🤖 Model: {os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')}", flush=True)
+    print(f"🧪 Mock/Offline Mode: {'Enabled' if is_mock else 'Disabled'}", flush=True)
+    print(f"🛡️  Dry-Run Mode:     {'Enabled' if os.getenv('DRY_RUN') == 'true' else 'Disabled'}", flush=True)
+
+    # Report integration credentials status transparently
+    has_gemini = bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
+    jira_url = os.getenv("JIRA_BASE_URL", "").strip()
+    jira_email = os.getenv("JIRA_EMAIL", "").strip()
+    has_jira_token = bool(os.getenv("JIRA_API_TOKEN", "").strip())
+    has_gh_token = bool(os.getenv("GITHUB_TOKEN", "").strip() or os.getenv("GH_TOKEN", "").strip())
+
+    print("\n🔑 Integrations & Credentials Detected:", flush=True)
+    print(f"   • Google Gemini API Key: {'✅ Configured' if has_gemini else '❌ Missing (Required for live mode)'}", flush=True)
+    print(f"   • Jira Base URL:         {('✅ ' + jira_url) if jira_url else '⚠️  Not Configured (Will fall back to mock issue)'}", flush=True)
+    print(f"   • Jira Account Email:    {('✅ ' + jira_email) if jira_email else '⚠️  Not Configured'}", flush=True)
+    print(f"   • Jira API Token:        {'✅ Configured' if has_jira_token else '⚠️  Not Configured'}", flush=True)
+    print(f"   • GitHub Token:          {'✅ Configured' if has_gh_token else '❌ Missing'}", flush=True)
+    print("=" * 65 + "\n", flush=True)
+
     if not target_repo_path.is_dir():
         print_fatal_error(
             stage="Target Repository Directory Not Found",
@@ -501,7 +526,7 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
 
     try:
         # Pre-flight Check: Read and validate Jira story immediately
-        print(f"🔍 [Pre-flight] Retrieving and validating Jira requirements for '{ticket}'...")
+        print(f"🔍 [Pre-flight] Retrieving and validating Jira requirements for '{ticket}'...", flush=True)
         jira_data = get_jira_issue(ticket)
         if "error" in jira_data:
             print_fatal_error(
@@ -525,7 +550,7 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
         has_api_key = bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
         if is_mock or not has_api_key:
             if not has_api_key:
-                print("ℹ️  [Notice] No GOOGLE_API_KEY found in environment. Running in offline simulation mode.")
+                print("ℹ️  [Notice] No GOOGLE_API_KEY found in environment. Running in offline simulation mode.", flush=True)
             return await run_simulation_mode(ticket, session)
 
         # Live Gemini AI execution via official google.genai SDK with multi-turn tool calling loop
@@ -584,7 +609,7 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
                 f"10. Output your final summary."
             )
 
-            print(f"🤖 Invoking Gemini ({model}) with autonomous multi-step reasoning...")
+            print(f"🤖 Invoking Gemini ({model}) with autonomous multi-step reasoning...", flush=True)
             chat = client.chats.create(
                 model=model,
                 config=types.GenerateContentConfig(
@@ -593,6 +618,7 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
                 ),
             )
 
+            print(f"📤 Sending initial story requirements prompt to {model}...", flush=True)
             response = chat.send_message(prompt)
 
             step = 1
@@ -602,11 +628,20 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
             pr_error = None
             pr_url = None
 
-            while response.function_calls and step <= max_steps:
+            while step <= max_steps:
+                if response.text and response.text.strip():
+                    print(f"\n🧠 [Agent Thought]:\n{response.text.strip()}\n", flush=True)
+
+                if not response.function_calls:
+                    print("🏁 Agent indicated all tasks are completed (no further tool calls).", flush=True)
+                    break
+
+                print(f"\n⚡ [Turn {step}] Agent selected {len(response.function_calls)} action(s)...", flush=True)
                 tool_responses = []
                 for call in response.function_calls:
                     tool_name = call.name
                     tool_args = call.args or {}
+                    print(f"   ▶ Executing tool: {tool_name}({list(tool_args.keys())})...", flush=True)
 
                     if tool_name in tool_map:
                         try:
@@ -652,38 +687,41 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
                     )
 
                 step += 1
+                print(f"⏳ [Turn {step - 1}] Sending tool outputs back to Gemini ({model})...", flush=True)
                 response = chat.send_message(tool_responses)
 
             if last_commit:
                 # Local commit succeeded; mark session complete so cleanup does not discard work
                 session.mark_success()
 
-            print("\n" + "=" * 65)
+            print("\n" + "=" * 65, flush=True)
             if pr_error:
-                print("⚠️  CodeFactoryAgent Finished with Warnings / Incomplete PR:")
+                print("⚠️  CodeFactoryAgent Finished with Warnings / Incomplete PR:", flush=True)
             else:
-                print("🎉 CodeFactoryAgent Autonomous Execution Finished Successfully!")
-            print("=" * 65)
+                print("🎉 CodeFactoryAgent Autonomous Execution Finished Successfully!", flush=True)
+            print("=" * 65, flush=True)
             if response.text:
-                print(response.text)
+                print(response.text, flush=True)
 
             if pr_error:
-                print("\n" + "!" * 65)
-                print("🚨 PULL REQUEST CREATION FAILED")
-                print("!" * 65)
-                print(f"• Ticket:       {ticket}")
-                print(f"• Branch:       {last_branch} (All code and tests committed locally)")
+                print("\n" + "!" * 65, flush=True)
+                print("🚨 PULL REQUEST CREATION FAILED", flush=True)
+                print("!" * 65, flush=True)
+                print(f"• Ticket:       {ticket}", flush=True)
+                print(f"• Branch:       {last_branch} (All code and tests committed locally)", flush=True)
                 if last_commit:
-                    print(f"• Commit SHA:   {last_commit}")
-                print(f"• Root Cause:   {pr_error}")
-                print("\n💡 Manual Push Command:")
-                print(f"   git -C \"{target_repo_path}\" push -u origin {last_branch}")
-                print("!" * 65 + "\n")
+                    print(f"• Commit SHA:   {last_commit}", flush=True)
+                print(f"• Root Cause:   {pr_error}", flush=True)
+                print("\n💡 Manual Push Command:", flush=True)
+                print(f"   git -C \"{target_repo_path}\" push -u origin {last_branch}", flush=True)
+                print("!" * 65 + "\n", flush=True)
                 return EXIT_EXTERNAL_SERVICE_ERROR
 
             return EXIT_SUCCESS
 
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             print_fatal_error(
                 stage="Gemini AI Invocation Failed",
                 error_message=str(exc),
