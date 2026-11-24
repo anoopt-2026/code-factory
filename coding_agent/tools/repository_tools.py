@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 ROOT = Path(__file__).resolve().parents[2]
-EXCLUDED_DIRS = {".git", ".idea", ".vscode", "target", ".mvn", "__pycache__", "node_modules", "build", ".venv"}
+EXCLUDED_DIRS = {".git", ".idea", ".vscode", "target", ".mvn", "__pycache__", "node_modules", "build", ".venv", ".code-factory-agent"}
 PROTECTED_NAMES = {".env", ".env.local", ".env.production", "id_rsa", "id_ed25519"}
 MAX_FILE_BYTES = 500_000
 COMMAND_TIMEOUT_SECONDS = 300

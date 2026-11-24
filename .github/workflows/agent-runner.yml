@@ -17,6 +17,11 @@ on:
         required: false
         type: boolean
         default: false
+      dry_run:
+        description: 'Simulate git push and PR creation without modifying remote repository'
+        required: false
+        type: boolean
+        default: false
       java_version:
         description: 'Java runtime version for target app'
         required: false
@@ -53,7 +58,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: anoopt-2026/code-factory
-          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN || github.token }}
           path: .code-factory-agent
           ref: main
 
@@ -84,13 +89,17 @@ jobs:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_ISSUE_KEY: ${{ inputs.jira_ticket_number }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN || github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           TARGET_REPO_DIR: ${{ github.workspace }}
           MOCK_MODE: ${{ inputs.mock_mode }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           EXTRA_FLAGS=""
           if [ "${{ inputs.mock_mode }}" = "true" ]; then
             EXTRA_FLAGS="$EXTRA_FLAGS --mock"
           fi
-          python .code-factory-agent/run_agent.py --ticket "${{ inputs.jira_ticket_number }}" --repo-dir "${{ github.workspace }}" $EXTRA_FLAGS
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            EXTRA_FLAGS="$EXTRA_FLAGS --dry-run"
+          fi
+          python .code-factory-agent/run_agent.py --ticket "${{ inputs.jira_ticket_number }}" --repo-dir "${{ github.workspace }}" --model "${{ inputs.gemini_model }}" $EXTRA_FLAGS
