@@ -111,14 +111,26 @@ def prepare_feature_branch(issue_key: str, base_branch: str = "main") -> dict:
                         base_branch = "main"
                         _git(repo, "checkout", "-B", "main")
 
-        # Checkout base branch first if not already on it
+        # Check if already active on feature branch
         curr = _git(repo, "branch", "--show-current").stdout.strip()
+        if curr == clean_key:
+            head = _git(repo, "rev-parse", "--short", "HEAD")
+            return {
+                "repository": str(repo),
+                "issue_key": clean_key,
+                "branch": clean_key,
+                "base_branch": base_branch,
+                "head_commit": head.stdout.strip() if head.returncode == 0 else "unknown",
+                "message": f"Already active on feature branch '{clean_key}'. Ready for implementation.",
+            }
+
+        # Checkout base branch first if not already on it
         if curr != base_branch and base_branch:
             checkout_base = _git(repo, "checkout", base_branch)
             if checkout_base.returncode != 0:
                 base_branch = curr or "main"
 
-        # Identify existing branches on local and remote origin to prevent collisions
+        # Identify existing branches on local and remote origin
         remote_branches = set()
         remotes = _git(repo, "remote")
         if "origin" in remotes.stdout.split():
@@ -141,35 +153,35 @@ def prepare_feature_branch(issue_key: str, base_branch: str = "main") -> dict:
                 if b_clean:
                     local_branches.add(b_clean)
 
-        # If branch already exists on remote origin or locally, increment counter: KAN-4-1, KAN-4-2, etc.
-        feature_branch = clean_key
-        has_collision = (feature_branch in remote_branches) or (feature_branch in local_branches)
-        if has_collision:
-            counter = 1
-            candidate = f"{clean_key}-{counter}"
-            while candidate in remote_branches or candidate in local_branches:
-                counter += 1
-                candidate = f"{clean_key}-{counter}"
-            feature_branch = candidate
+        # If branch already exists locally or remotely, fail gracefully
+        if clean_key in remote_branches or clean_key in local_branches:
+            locations = []
+            if clean_key in local_branches:
+                locations.append("locally")
+            if clean_key in remote_branches:
+                locations.append("on remote origin")
+            where = " and ".join(locations)
+            return {
+                "error": (
+                    f"Branch '{clean_key}' already exists {where}. "
+                    "Stopping agent execution to prevent overwriting existing work or active pull requests. "
+                    f"Please review, merge, or delete the existing branch '{clean_key}' before re-running."
+                )
+            }
 
-        # Create or checkout feature branch
-        checkout_feature = _git(repo, "checkout", "-B", feature_branch)
+        # Create new feature branch
+        checkout_feature = _git(repo, "checkout", "-b", clean_key)
         if checkout_feature.returncode:
-            return {"error": f"Failed to create feature branch '{feature_branch}': {checkout_feature.stderr}"}
+            return {"error": f"Failed to create feature branch '{clean_key}': {checkout_feature.stderr.strip()}"}
 
         head = _git(repo, "rev-parse", "--short", "HEAD")
-        msg = (
-            f"Feature branch '{feature_branch}' (iteration suffix added due to existing branch) created from '{base_branch}'."
-            if has_collision
-            else f"Feature branch '{feature_branch}' created from '{base_branch}'. Ready for implementation."
-        )
         return {
             "repository": str(repo),
             "issue_key": clean_key,
-            "branch": feature_branch,
+            "branch": clean_key,
             "base_branch": base_branch,
             "head_commit": head.stdout.strip() if head.returncode == 0 else "unknown",
-            "message": msg,
+            "message": f"Feature branch '{clean_key}' created from '{base_branch}'. Ready for implementation.",
         }
     except (subprocess.TimeoutExpired, OSError) as exc:
         return {"error": str(exc)}

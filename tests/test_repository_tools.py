@@ -74,19 +74,22 @@ class TestRepositoryTools(unittest.TestCase):
         self.assertTrue(test_res.get("tests_passed"))
         self.assertEqual(test_res.get("exit_code"), 0)
 
-    def test_prepare_feature_branch_collision_counter(self):
-        from coding_agent.tools.repository_tools import prepare_feature_branch
+    def test_prepare_feature_branch_stops_if_branch_exists(self):
+        from coding_agent.tools.repository_tools import prepare_feature_branch, _git
         # First preparation: creates KAN-4
         b1 = prepare_feature_branch("KAN-4")
         self.assertEqual(b1.get("branch"), "KAN-4")
 
-        # Second preparation when KAN-4 is already present in local branch list: creates KAN-4-1
-        b2 = prepare_feature_branch("KAN-4")
-        self.assertEqual(b2.get("branch"), "KAN-4-1")
+        # Calling while already on KAN-4: idempotent, returns active branch
+        b1_again = prepare_feature_branch("KAN-4")
+        self.assertEqual(b1_again.get("branch"), "KAN-4")
 
-        # Third preparation: creates KAN-4-2
-        b3 = prepare_feature_branch("KAN-4")
-        self.assertEqual(b3.get("branch"), "KAN-4-2")
+        # Switching to base branch and attempting to re-prepare KAN-4: fails gracefully because branch already exists
+        base = b1.get("base_branch", "master")
+        _git(self.repo_path, "checkout", base)
+        b2 = prepare_feature_branch("KAN-4")
+        self.assertIn("error", b2)
+        self.assertIn("already exists", b2["error"])
 
 
 if __name__ == "__main__":

@@ -579,11 +579,13 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
             _log_tool_step(0, "prepare_feature_branch", {"issue_key": ticket}, branch_res, ticket)
             if "error" in branch_res:
                 print_fatal_error(
-                    stage=f"Git Branching Failure for '{ticket}'",
+                    stage=f"Feature Branch Preparation Stopped for '{ticket}'",
                     error_message=branch_res["error"],
                     troubleshooting=[
-                        "Check if target repository is a valid Git repo",
-                        "Ensure no merge conflicts or uncommitted blocking changes exist",
+                        f"A branch for '{ticket}' already exists in this repository or on remote origin.",
+                        f"To re-run fresh, delete the branch locally: git branch -D {ticket}",
+                        f"If the branch was pushed to GitHub, delete the remote branch: git push origin --delete {ticket}",
+                        "Then re-run the agent to begin development on a clean branch.",
                     ],
                     ticket=ticket,
                 )
