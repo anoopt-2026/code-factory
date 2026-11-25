@@ -27,6 +27,11 @@ on:
         required: false
         type: string
         default: '21'
+      agent_ref:
+        description: 'Branch, tag or SHA of code-factory engine to checkout'
+        required: false
+        type: string
+        default: 'main'
     secrets:
       GOOGLE_API_KEY:
         required: false
@@ -60,7 +65,7 @@ jobs:
           repository: anoopt-2026/code-factory
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN || github.token }}
           path: .code-factory-agent
-          ref: main
+          ref: ${{ inputs.agent_ref || 'main' }}
 
       - name: Set up Java Runtime
         uses: actions/setup-java@v4
