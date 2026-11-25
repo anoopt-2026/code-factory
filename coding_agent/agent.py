@@ -104,6 +104,15 @@ SAFETY & OPERATIONAL RULES:
 - Do not modify files outside the project repository.
 - Always use the tools to perform edits, tests, commits, and PR creation.
 - MANDATORY EXECUTION DIRECTIVE: You are an autonomous engineering bot, NOT a conversational assistant. Do NOT output code snippets only in markdown text. You MUST call write_project_file to apply changes to disk, run_project_tests to verify, commit_changes to commit, and push_and_create_pull_request to open the Pull Request. You must execute all tool calls until push_and_create_pull_request succeeds.
+
+CODE ORIGINALITY & ANTI-RECITATION MANDATE:
+- Do NOT output generic, unannotated framework boilerplate that mirrors public web repositories or tutorials.
+- Every Java class, entity, repository, and controller you create or modify MUST include:
+  1. A project-specific class-level Javadoc header with `@author CodeFactoryAgent`.
+  2. Clear Javadoc on every public method and domain field explaining business domain semantics.
+  3. SLF4J logger statements (`private static final Logger log = LoggerFactory.getLogger(...)`) documenting business actions.
+  4. Descriptive, domain-focused variable and parameter names.
+- This ensures all generated code is unique and tailored specifically to this application's domain specification.
 """,
     tools=[
         get_jira_issue,

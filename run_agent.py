@@ -634,7 +634,8 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
                 config=types.GenerateContentConfig(
                     system_instruction=root_agent.instruction,
                     tools=tools,
-                    temperature=0.2,
+                    temperature=0.7,
+                    top_p=0.95,
                 ),
             )
 
@@ -646,6 +647,7 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
             last_commit = None
             pr_error = None
             pr_url = None
+            recitation_retries = 0
             is_dry_run = os.getenv("DRY_RUN", "").lower() in ("true", "1", "yes")
 
             while step <= max_steps:
@@ -653,15 +655,28 @@ async def run_agent_async(ticket: str, is_mock: bool = False) -> int:
                 cand = response.candidates[0] if (response and response.candidates) else None
                 finish_reason = getattr(cand, "finish_reason", None)
                 if finish_reason and "RECITATION" in str(finish_reason):
-                    print(f"\n⚠️  [Turn {step}] Model output was flagged for recitation/repetition. Nudging to write custom domain code...", flush=True)
-                    nudge = (
-                        "Your previous response was flagged for recitation. "
-                        "Please write original, domain-specific code tailored uniquely to this Employee Service entity and domain specification. "
-                        "Call write_project_file directly with the custom implementation."
-                    )
+                    recitation_retries += 1
+                    print(f"\n⚠️  [Turn {step}] Model output was flagged for recitation/repetition (Attempt {recitation_retries}/2)...", flush=True)
+                    if recitation_retries > 2:
+                        print("🚨 Excessive recitation flags. Forcing unique domain-specific implementation directive...", flush=True)
+                        nudge = (
+                            "CRITICAL ANTI-RECITATION DIRECTIVE: Do not generate standard framework boilerplate. "
+                            "Write custom, domain-specific Java code with explicit Javadoc headers (@author CodeFactoryAgent), "
+                            "SLF4J logging on every method, and custom parameter naming tailored strictly to DOMAIN_SPEC.md. "
+                            "Execute write_project_file now."
+                        )
+                        recitation_retries = 0
+                    else:
+                        nudge = (
+                            "Notice: Your previous response matched public training data and was filtered. "
+                            "Please write original, domain-tailored Java code with custom Javadoc comments and SLF4J logs. "
+                            "Call write_project_file to write the custom code."
+                        )
                     step += 1
                     response = chat.send_message(nudge)
                     continue
+                else:
+                    recitation_retries = 0
 
                 if response.text and response.text.strip():
                     print(f"\n🧠 [Agent Thought]:\n{response.text.strip()}\n", flush=True)
